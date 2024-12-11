@@ -1,8 +1,7 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Box,
   Button,
-  Select,
   Input,
   VStack,
   HStack,
@@ -21,20 +20,44 @@ import {
   Image,
   Link,
   Icon,
+  Container,
+  Center,
 } from '@chakra-ui/react';
 import { useAccount, useNetwork, useSwitchNetwork, useProvider, useSigner } from 'wagmi';
 import { Web3Button } from '@web3modal/react';
 import Moralis from 'moralis';
 import { ethers } from 'ethers';
 import { 
-  TOKENS, 
   getTokenAddress, 
   isNativeToken, 
   getWrappedToken,
   getTokenDecimals,
   TOKEN_INFO,
+  importToken,
 } from '../utils/tokens';
-import { FaGlobe, FaTwitter, FaTelegram } from 'react-icons/fa';
+import { FaGlobe, FaTwitter, FaTelegram, FaArrowDown, FaTimes, FaExternalLinkAlt, FaInstagram, FaTiktok, FaCog, FaPlus } from 'react-icons/fa';
+import './SwapInterface.css';
+
+// Add chain logo imports
+import mainlogo from '../assets/logo.png';
+import ethLogo from '../assets/ethereum.webp';
+import bscLogo from '../assets/bnb.webp';
+import polygonLogo from '../assets/polygon.webp';
+import arbitrumLogo from '../assets/arbitrum.webp';
+import solanaLogo from '../assets/solana.png';
+import lineaLogo from '../assets/linea.png';
+import baseLogo from '../assets/base.png';
+import poweredby from '../assets/poweredby.png';
+
+// Update CHAIN_LOGOS constant
+const CHAIN_LOGOS = {
+  1: ethLogo,
+  56: bscLogo,
+  137: polygonLogo,
+  42161: arbitrumLogo,
+  8453: baseLogo,
+  'solana': solanaLogo,
+};
 
 const CHAIN_NAMES = {
   1: 'Ethereum',
@@ -45,18 +68,24 @@ const CHAIN_NAMES = {
 };
 
 const ROUTER_ADDRESSES = {
-  1: '0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D', // Uniswap V2
+  1: '0xE592427A0AEce92De3Edee1F18E0157C05861564', // Uniswap V3 Router
   56: '0x10ED43C718714eb63d5aA57B78B54704E256024E', // PancakeSwap
-  137: '0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff', // QuickSwap
-  42161: '0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506', // SushiSwap
-  8453: '0x327Df1E6de05895d2ab08513aaDD9313Fe505d86', // BaseSwap
+  137: '0xE592427A0AEce92De3Edee1F18E0157C05861564', // Uniswap V3 Router
+  42161: '0xE592427A0AEce92De3Edee1F18E0157C05861564', // Uniswap V3 Router
+  8453: '0x327Df1E6de05895d2ab08513aaDD9313Fe505d86', // Base Uniswap V2 Router
 };
 
 const ROUTER_ABI = [
+  // V2 methods
   'function getAmountsOut(uint amountIn, address[] memory path) public view returns (uint[] memory amounts)',
   'function swapExactTokensForTokens(uint amountIn, uint amountOutMin, address[] calldata path, address to, uint deadline) external returns (uint[] memory amounts)',
   'function swapExactETHForTokens(uint amountOutMin, address[] calldata path, address to, uint deadline) external payable returns (uint[] memory amounts)',
   'function swapExactTokensForETH(uint amountIn, uint amountOutMin, address[] calldata path, address to, uint deadline) external returns (uint[] memory amounts)',
+  // V3 methods
+  'function exactInputSingle(tuple(address tokenIn,address tokenOut,uint24 fee,address recipient,uint256 deadline,uint256 amountIn,uint256 amountOutMinimum,uint160 sqrtPriceLimitX96) params) external payable returns (uint256 amountOut)',
+  'function exactInput(tuple(bytes path,address recipient,uint256 deadline,uint256 amountIn,uint256 amountOutMinimum) params) external payable returns (uint256 amountOut)',
+  'function unwrapWETH9(uint256 amountMinimum, address recipient) external payable',
+  'function refundETH() external payable'
 ];
 
 const ERC20_ABI = [
@@ -71,10 +100,10 @@ const ERC20_ABI = [
 
 // Add DEX names mapping
 const DEX_NAMES = {
-  1: 'Uniswap V2',
+  1: 'Uniswap V3',
   56: 'PancakeSwap',
-  137: 'QuickSwap',
-  42161: 'SushiSwap',
+  137: 'Uniswap V3',
+  42161: 'Uniswap V3',
   8453: 'BaseSwap',
 };
 
@@ -82,10 +111,32 @@ const DEX_NAMES = {
 const FEE_RECIPIENT = '0x67FEa3f7Ba299F10269519E9987180Cb80C92C61';
 const FEE_PERCENTAGE = 0.3; // 0.3%
 
+// Add gas reserves for different chains
+const GAS_RESERVES = {
+  1: 0.01,      // Ethereum: 0.01 ETH
+  56: 0.01,     // BSC: 0.01 BNB
+  137: 1,       // Polygon: 1 MATIC
+  42161: 0.01,  // Arbitrum: 0.01 ETH
+  8453: 0.01,   // Base: 0.01 ETH
+};
+
+// Add Uniswap V3 Quoter
+const QUOTER_ADDRESSES = {
+  1: '0x61fFE014bA17989E743c5F6cB21bF9697530B21e',  // QuoterV2
+  137: '0x61fFE014bA17989E743c5F6cB21bF9697530B21e', // QuoterV2
+  42161: '0x61fFE014bA17989E743c5F6cB21bF9697530B21e', // QuoterV2
+  8453: '0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a'  // Base chain quoter
+};
+
+const QUOTER_ABI = [
+  'function quoteExactInputSingle(tuple(address tokenIn, address tokenOut, uint256 amountIn, uint24 fee, uint160 sqrtPriceLimitX96) params) external returns (uint256 amountOut, uint160 sqrtPriceX96After, uint32 initializedTicksCrossed, uint256 gasEstimate)',
+  'function quoteExactInput(bytes path, uint256 amountIn) external returns (uint256 amountOut, uint160[] memory sqrtPriceX96AfterList, uint32[] memory initializedTicksCrossedList, uint256 gasEstimate)'
+];
+
 const SwapInterface = () => {
-  const { address, isConnected } = useAccount();
+  const { address } = useAccount();
   const { chain } = useNetwork();
-  const { switchNetwork, isLoading: isSwitchingChain, pendingChainId } = useSwitchNetwork();
+  const { switchNetwork, isLoading: isSwitchingChain } = useSwitchNetwork();
   const provider = useProvider();
   const { data: signer } = useSigner();
   const toast = useToast();
@@ -100,8 +151,11 @@ const SwapInterface = () => {
   const [nativeBalance, setNativeBalance] = useState('0');
   const [slippage, setSlippage] = useState('0.5');
   const [customTokens, setCustomTokens] = useState({});
-  const [tokenMetadata, setTokenMetadata] = useState({});
-  const { isOpen: isImportModalOpen, onOpen: onImportModalOpen, onClose: onImportModalClose } = useDisclosure();
+  const { 
+    isOpen: isImportModalOpen, 
+    onOpen: onImportModalOpen, 
+    onClose: onImportModalClose 
+  } = useDisclosure();
   const [newToken, setNewToken] = useState({
     address: '',
     symbol: '',
@@ -109,6 +163,37 @@ const SwapInterface = () => {
   });
   const [importTokenInfo, setImportTokenInfo] = useState(null);
   const [importLoading, setImportLoading] = useState(false);
+  const [reverseQuote, setReverseQuote] = useState(null);
+  const [isReverseQuote, setIsReverseQuote] = useState(false);
+  const [toAmount, setToAmount] = useState('');
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [customSlippage, setCustomSlippage] = useState('');
+
+  // Add formatTokenAmount function
+  const formatTokenAmount = (amount, decimals, symbol) => {
+    // For tokens like BABYDOGE, show without decimal places
+    if (symbol === 'BABYDOGE') {
+      return ethers.utils.formatUnits(amount, decimals).split('.')[0];
+    }
+    // For other tokens, limit to 6 decimal places
+    return parseFloat(ethers.utils.formatUnits(amount, decimals)).toFixed(6);
+  };
+
+  // Add calculateFee function
+  const calculateFee = (amount) => {
+    const feeMultiplier = FEE_PERCENTAGE * 100; // Convert 0.3% to 30 basis points
+    return ethers.BigNumber.from(amount)
+      .mul(feeMultiplier)
+      .div(10000); // Divide by 100 * 100 to get the percentage
+  };
+
+  // Add getAvailableTokens function
+  const getAvailableTokens = useCallback(() => {
+    if (!chain?.id) return [];
+    const baseTokens = Object.keys(TOKEN_INFO[chain.id] || {});
+    const customTokensList = customTokens[chain.id] ? Object.keys(customTokens[chain.id]) : [];
+    return [...new Set([...baseTokens, ...customTokensList])];
+  }, [chain?.id, customTokens]);
 
   // Function to swap the selected tokens
   const handleSwapTokens = () => {
@@ -125,7 +210,7 @@ const SwapInterface = () => {
       try {
         if (!Moralis.Core.isStarted) {
           await Moralis.start({
-            apiKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJub25jZSI6ImVhNWU1MjY2LTAzZTQtNDM1NC1hZWI2LTc4YzNkNThhZjZkZiIsIm9yZ0lkIjoiMzQwNDMzIiwidXNlcklkIjoiMzQ5OTc2IiwidHlwZSI6IlBST0pFQ1QiLCJ0eXBlSWQiOiI0YTI5YmU4OC0zNzQzLTQ1Y2QtYWVkNS0xN2Q1ZmUxNDE2MDAiLCJpYXQiOjE3MzE4MzkzNTksImV4cCI6NDg4NzU5OTM1OX0.6lPHQrJxrS6Rm8PsV44h1s4HsB4B_62tLXkcoPZfD9U',
+            apiKey: '',
           });
         }
       } catch (error) {
@@ -135,67 +220,9 @@ const SwapInterface = () => {
     initMoralis();
   }, []);
 
-  // Function to fetch token metadata from Moralis
-  const fetchTokenMetadata = useCallback(async (chainId, tokenAddress) => {
-    try {
-      // Handle native token metadata
-      if (tokenAddress === 'NATIVE') {
-        const nativeSymbol = {
-          1: 'ETH',
-          56: 'BNB',
-          137: 'MATIC',
-          42161: 'ETH',
-          8453: 'ETH'
-        }[chainId] || 'ETH';
-        
-        return {
-          address: 'NATIVE',
-          symbol: nativeSymbol,
-          name: nativeSymbol,
-          decimals: 18,
-          logo: `https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/${
-            chainId === 1 ? 'ethereum' :
-            chainId === 56 ? 'binance' :
-            chainId === 137 ? 'polygon' :
-            'ethereum'
-          }/info/logo.png`,
-          thumbnail: null,
-          links: null
-        };
-      }
-
-      // Fetch token metadata from Moralis
-      const response = await Moralis.EvmApi.token.getTokenMetadata({
-        chain: '0x' + chainId.toString(16),
-        addresses: [tokenAddress],
-      });
-
-      if (response?.raw?.[0]) {
-        const metadata = response.raw[0];
-        return {
-          address: metadata.address,
-          symbol: metadata.symbol,
-          name: metadata.name,
-          decimals: parseInt(metadata.decimals),
-          logo: metadata.logo || metadata.thumbnail || `https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/${metadata.address}/logo.png`,
-          thumbnail: metadata.thumbnail,
-          links: metadata.links ? {
-            website: metadata.links.website,
-            twitter: metadata.links.twitter,
-            telegram: metadata.links.telegram
-          } : null
-        };
-      }
-      return null;
-    } catch (error) {
-      console.error('Error fetching token metadata:', error);
-      return null;
-    }
-  }, []);
-
   // Function to fetch token balance
   const fetchTokenBalance = useCallback(async (tokenSymbol) => {
-    if (!address || !chain?.id || !provider || !tokenSymbol) return '0';
+    if (!address || !chain || !provider || !tokenSymbol) return '0';
 
     try {
       if (isNativeToken(chain.id, tokenSymbol)) {
@@ -228,11 +255,11 @@ const SwapInterface = () => {
       console.error('Error fetching balance:', error);
       return '0';
     }
-  }, [address, chain?.id, provider, customTokens]);
+  }, [address, chain, provider, customTokens]);
 
   // Function to fetch native balance
   const fetchNativeBalance = useCallback(async () => {
-    if (!address || !chain?.id || !provider) return '0';
+    if (!address || !chain || !provider) return '0';
     try {
       const balance = await provider.getBalance(address);
       return ethers.utils.formatEther(balance);
@@ -240,7 +267,7 @@ const SwapInterface = () => {
       console.error('Error fetching native balance:', error);
       return '0';
     }
-  }, [address, chain?.id, provider]);
+  }, [address, chain, provider]);
 
   // Update native balance
   useEffect(() => {
@@ -428,49 +455,45 @@ const SwapInterface = () => {
     }
   };
 
-  const getQuote = async () => {
-    if (!fromTokenSymbol || !toTokenSymbol || !amount || !chain?.id || !address || !signer) return;
+  // Update getQuote function
+  const getQuote = async (isReverse = false) => {
+    if (!chain?.id) {
+      toast({
+        title: 'Error',
+        description: 'Please connect your wallet',
+        status: 'error',
+        duration: 3000,
+      });
+      return;
+    }
+
+    if (!fromTokenSymbol || !toTokenSymbol || !address || !signer) return;
+    
+    const inputToValidate = isReverse ? toAmount : amount;
+    if (!inputToValidate) return;
+
+    const numericValue = parseFloat(inputToValidate);
+    if (isNaN(numericValue) || numericValue <= 0) {
+      toast({
+        title: 'Invalid amount',
+        description: 'Please enter a valid number greater than 0',
+        status: 'error',
+        duration: 3000,
+      });
+      return;
+    }
 
     try {
-      // Check if we have a router for this chain
       const routerAddress = ROUTER_ADDRESSES[chain.id];
       if (!routerAddress) {
         throw new Error('Swapping not supported on this chain yet');
       }
 
-      // Check balance before proceeding
+      setLoading(true);
+
       const fromTokenAddress = getTokenAddress(chain.id, fromTokenSymbol) || 
         customTokens[chain.id]?.[fromTokenSymbol]?.address;
       
-      let userBalance;
-      let decimals;
-      
-      if (isNativeToken(chain.id, fromTokenSymbol)) {
-        userBalance = ethers.utils.parseEther(nativeBalance);
-        decimals = 18;
-      } else {
-        const tokenContract = new ethers.Contract(fromTokenAddress, ERC20_ABI, provider);
-        [userBalance, decimals] = await Promise.all([
-          tokenContract.balanceOf(address),
-          tokenContract.decimals()
-        ]);
-      }
-
-      const amountWei = ethers.utils.parseUnits(amount, decimals);
-      
-      if (userBalance.lt(amountWei)) {
-        toast({
-          title: 'Insufficient balance',
-          description: `You don't have enough ${fromTokenSymbol}. Your balance: ${ethers.utils.formatUnits(userBalance, decimals)} ${fromTokenSymbol}`,
-          status: 'error',
-          duration: 5000,
-          isClosable: true,
-        });
-        return;
-      }
-
-      setLoading(true);
-
       const toTokenAddress = getTokenAddress(chain.id, toTokenSymbol) || 
         customTokens[chain.id]?.[toTokenSymbol]?.address;
       
@@ -483,10 +506,6 @@ const SwapInterface = () => {
         throw new Error('Wrapped token not found for this chain');
       }
 
-      // Get router address and DEX name for the current chain
-      const dexName = DEX_NAMES[chain.id];
-
-      // Use wrapped token address for native tokens
       const actualFromAddress = isNativeToken(chain.id, fromTokenSymbol) 
         ? wrappedToken.address 
         : fromTokenAddress;
@@ -494,37 +513,74 @@ const SwapInterface = () => {
         ? wrappedToken.address
         : toTokenAddress;
 
-      // Get token decimals
+      const fromDecimals = await (isNativeToken(chain.id, fromTokenSymbol) 
+        ? Promise.resolve(18) 
+        : new ethers.Contract(actualFromAddress, ERC20_ABI, provider).decimals());
+      
       const toDecimals = await (isNativeToken(chain.id, toTokenSymbol) 
         ? Promise.resolve(18) 
         : new ethers.Contract(actualToAddress, ERC20_ABI, provider).decimals());
 
-      // Convert amount to proper decimals
-      const swapAmountWei = ethers.utils.parseUnits(amount, decimals).toString();
+      let amountsAfterFee;
+      let swapAmountWei;
+      let feeAmount;
 
-      // Calculate fee first
-      const feeAmount = calculateFee(swapAmountWei);
-      const amountAfterFee = ethers.BigNumber.from(swapAmountWei).sub(feeAmount);
+      // Different handling for Base chain
+      if (chain.id === 8453) {
+        const router = new ethers.Contract(routerAddress, ROUTER_ABI, provider);
+        swapAmountWei = ethers.utils.parseUnits(amount, fromDecimals);
+        feeAmount = calculateFee(swapAmountWei);
+        const amountAfterFee = swapAmountWei.sub(feeAmount);
+        const wrappedNative = getWrappedToken(chain.id).address;
 
-      // Create router contract instance
-      const router = new ethers.Contract(routerAddress, ROUTER_ABI, provider);
+        amountsAfterFee = await getBaseSwapQuote(
+          router,
+          amountAfterFee,
+          actualFromAddress,
+          actualToAddress,
+          wrappedNative
+        );
+      } else {
+        // Existing code for other chains
+        if (chain.id === 56) {
+          // PancakeSwap V2 style quoting
+          const router = new ethers.Contract(routerAddress, ROUTER_ABI, provider);
+          swapAmountWei = ethers.utils.parseUnits(amount, fromDecimals);
+          feeAmount = calculateFee(swapAmountWei);
+          const amountAfterFee = swapAmountWei.sub(feeAmount);
+          amountsAfterFee = await router.getAmountsOut(amountAfterFee, [actualFromAddress, actualToAddress]);
+        } else {
+          // Uniswap V3 style quoting
+          const quoterAddress = QUOTER_ADDRESSES[chain.id];
+          const quoter = new ethers.Contract(quoterAddress, QUOTER_ABI, provider);
+          const poolFee = 3000; // 0.3% pool fee
 
-      // Get quote with amount after fee
-      const amountsAfterFee = await router.getAmountsOut(
-        amountAfterFee,
-        [actualFromAddress, actualToAddress]
-      );
+          swapAmountWei = ethers.utils.parseUnits(amount, fromDecimals);
+          feeAmount = calculateFee(swapAmountWei);
+          const amountAfterFee = swapAmountWei.sub(feeAmount);
 
-      const estimatedOutputAmount = ethers.utils.formatUnits(amountsAfterFee[1], toDecimals);
+          const params = {
+            tokenIn: actualFromAddress,
+            tokenOut: actualToAddress,
+            amountIn: amountAfterFee,
+            fee: poolFee,
+            sqrtPriceLimitX96: 0
+          };
 
-      // Validate output amount
-      if (amountsAfterFee[1].isZero() || parseFloat(estimatedOutputAmount) === 0) {
-        throw new Error('Output amount is zero. This pair might not have enough liquidity on ' + dexName);
+          const [quoteAmount] = await quoter.callStatic.quoteExactInputSingle(params);
+          amountsAfterFee = [amountAfterFee, quoteAmount];
+        }
+      }
+
+      const estimatedOutputAmount = ethers.utils.formatUnits(amountsAfterFee[amountsAfterFee.length - 1], toDecimals);
+
+      if (amountsAfterFee[amountsAfterFee.length - 1].isZero() || parseFloat(estimatedOutputAmount) === 0) {
+        throw new Error('Output amount is zero. This pair might not have enough liquidity.');
       }
 
       const quoteData = {
-        fromTokenAmount: amountWei,
-        toTokenAmount: amountsAfterFee[1].toString(),
+        fromTokenAmount: swapAmountWei.toString(),
+        toTokenAmount: amountsAfterFee[amountsAfterFee.length - 1].toString(),
         fromToken: {
           address: actualFromAddress,
           symbol: fromTokenSymbol,
@@ -534,22 +590,33 @@ const SwapInterface = () => {
           symbol: toTokenSymbol,
         },
         router: routerAddress,
-        dexName: dexName,
-        path: [actualFromAddress, actualToAddress],
+        dexName: DEX_NAMES[chain.id],
+        path: amountsAfterFee.length === 3 ? 
+          [actualFromAddress, amountsAfterFee[1].address, actualToAddress] :
+          [actualFromAddress, actualToAddress],
         deadline: Math.floor(Date.now() / 1000) + 20 * 60,
         feeAmount: feeAmount.toString(),
-        amountAfterFee: amountAfterFee.toString(),
         options: {
-          gasLimit: ethers.BigNumber.from(chain.id === 8453 ? 400000 : chain.id === 56 ? 500000 : 300000),
+          gasLimit: ethers.BigNumber.from(chain.id === 8453 ? 500000 : 300000),
           gasPrice: await provider.getGasPrice()
         }
       };
 
-      setQuote(quoteData);
+      if (isReverse) {
+        setReverseQuote(quoteData);
+        setIsReverseQuote(true);
+        setAmount(ethers.utils.formatUnits(swapAmountWei, fromDecimals));
+      } else {
+        setQuote(quoteData);
+        setIsReverseQuote(false);
+        setToAmount(estimatedOutputAmount);
+      }
 
       toast({
-        title: 'Quote received from ' + dexName,
-        description: `Estimated: ${estimatedOutputAmount} ${toTokenSymbol}`,
+        title: 'Quote received',
+        description: isReverse 
+          ? `Required input: ${ethers.utils.formatUnits(swapAmountWei, fromDecimals)} ${fromTokenSymbol}`
+          : `Expected output: ${estimatedOutputAmount} ${toTokenSymbol}`,
         status: 'success',
         duration: 3000,
         isClosable: true,
@@ -558,97 +625,342 @@ const SwapInterface = () => {
       console.error('Error getting quote:', error);
       toast({
         title: 'Error getting quote',
-        description: error.reason || error.message || 'Failed to get quote',
+        description: error.message || 'Failed to get quote. This pair might not have enough liquidity.',
         status: 'error',
         duration: 3000,
         isClosable: true,
       });
-      setQuote(null);
+      if (isReverse) {
+        setReverseQuote(null);
+      } else {
+        setQuote(null);
+      }
     } finally {
       setLoading(false);
     }
   };
 
+  // Update handleSwap function to handle Uniswap V3 swaps
   const handleSwap = async () => {
-    if (!quote || !signer || !address || !chain?.id) return;
+    if (!chain?.id) {
+      toast({
+        title: 'Error',
+        description: 'Please connect your wallet',
+        status: 'error',
+        duration: 3000,
+      });
+      return;
+    }
 
-    setLoading(true);
+    const activeQuote = isReverseQuote ? reverseQuote : quote;
+    if (!activeQuote || !signer || !address || !chain?.id) {
+      toast({
+        title: 'Error',
+        description: 'Missing required data for swap',
+        status: 'error',
+        duration: 3000,
+      });
+      return;
+    }
+
+    // Show loading toast for wallet interaction
+    const loadingToast = toast({
+      position: 'bottom-right',
+      duration: null,
+      render: () => (
+        <Box
+          p={4}
+          bg="gray.800"
+          borderRadius="md"
+          display="flex"
+          alignItems="center"
+          gap={3}
+        >
+          <Spinner size="sm" color="blue.400" />
+          <Text color="white">Confirm in wallet...</Text>
+        </Box>
+      ),
+    });
+
+    const fromTokenAddress = getTokenAddress(chain.id, fromTokenSymbol) || 
+      customTokens[chain.id]?.[fromTokenSymbol]?.address;
+    
+    let userBalance;
+    let decimals;
+    
     try {
-      const router = new ethers.Contract(quote.router, ROUTER_ABI, signer);
+      if (isNativeToken(chain.id, fromTokenSymbol)) {
+        userBalance = ethers.utils.parseEther(nativeBalance);
+        decimals = 18;
+      } else {
+        const tokenContract = new ethers.Contract(fromTokenAddress, ERC20_ABI, provider);
+        [userBalance, decimals] = await Promise.all([
+          tokenContract.balanceOf(address),
+          tokenContract.decimals()
+        ]);
+      }
+
+      const swapAmount = ethers.BigNumber.from(activeQuote.fromTokenAmount);
+      const feeAmount = calculateFee(swapAmount);
+      const amountAfterFee = swapAmount.sub(feeAmount);
+
+      if (userBalance.lt(swapAmount)) {
+        toast.close(loadingToast);
+        toast({
+          title: 'Insufficient balance',
+          description: `You don't have enough ${fromTokenSymbol}. Your balance: ${ethers.utils.formatUnits(userBalance, decimals)} ${fromTokenSymbol}`,
+          status: 'error',
+          duration: 5000,
+          isClosable: true,
+        });
+        return;
+      }
+
+      setLoading(true);
+      const router = new ethers.Contract(activeQuote.router, ROUTER_ABI, signer);
       const deadline = Math.floor(Date.now() / 1000) + 20 * 60; // 20 minutes from now
 
-      // Send fee first
-      if (isNativeToken(chain.id, fromTokenSymbol)) {
-        // For native token swaps, send fee directly
-        const feeTx = await signer.sendTransaction({
-          to: FEE_RECIPIENT,
-          value: quote.feeAmount,
-          gasLimit: 21000
-        });
-        await feeTx.wait();
-        console.log('Fee sent:', ethers.utils.formatEther(quote.feeAmount), 'ETH');
-      } else {
-        // For token swaps, transfer fee tokens
+      // First handle approvals for non-native tokens
+      if (!isNativeToken(chain.id, fromTokenSymbol)) {
         const tokenContract = new ethers.Contract(
-          quote.fromToken.address,
+          activeQuote.fromToken.address,
           ERC20_ABI,
           signer
         );
 
-        // Approve router if needed
-        const currentAllowance = await tokenContract.allowance(address, quote.router);
-        if (currentAllowance.lt(quote.fromTokenAmount)) {
-          const approveTx = await tokenContract.approve(quote.router, ethers.constants.MaxUint256);
-          await approveTx.wait();
+        // Check allowance for router and FEE_RECIPIENT
+        const [routerAllowance, feeRecipientAllowance] = await Promise.all([
+          tokenContract.allowance(address, activeQuote.router),
+          tokenContract.allowance(address, FEE_RECIPIENT)
+        ]);
+
+        if (routerAllowance.lt(amountAfterFee)) {
+          // Update loading toast message for approval
+          toast.update(loadingToast, {
+            render: () => (
+              <Box
+                p={4}
+                bg="gray.800"
+                borderRadius="md"
+                display="flex"
+                alignItems="center"
+                gap={3}
+              >
+                <Spinner size="sm" color="blue.400" />
+                <Text color="white">Approve router in wallet...</Text>
+              </Box>
+            ),
+          });
+
+          try {
+            const approveTx = await tokenContract.approve(
+              activeQuote.router,
+              ethers.constants.MaxUint256,
+              { gasLimit: 100000 }
+            );
+            await approveTx.wait();
+            console.log('Router approved');
+          } catch (error) {
+            toast.close(loadingToast);
+            throw new Error('Failed to approve router: ' + (error.reason || error.message));
+          }
         }
 
-        // Send fee
-        const feeTx = await tokenContract.transfer(FEE_RECIPIENT, quote.feeAmount, {
-          gasLimit: 100000
+        if (feeRecipientAllowance.lt(feeAmount)) {
+          // Update loading toast message for fee approval
+          toast.update(loadingToast, {
+            render: () => (
+              <Box
+                p={4}
+                bg="gray.800"
+                borderRadius="md"
+                display="flex"
+                alignItems="center"
+                gap={3}
+              >
+                <Spinner size="sm" color="blue.400" />
+                <Text color="white">Approve fee recipient in wallet...</Text>
+              </Box>
+            ),
+          });
+
+          try {
+            const approveTx = await tokenContract.approve(
+              FEE_RECIPIENT,
+              ethers.constants.MaxUint256,
+              { gasLimit: 100000 }
+            );
+            await approveTx.wait();
+            console.log('FEE_RECIPIENT approved');
+          } catch (error) {
+            toast.close(loadingToast);
+            throw new Error('Failed to approve FEE_RECIPIENT: ' + (error.reason || error.message));
+          }
+        }
+
+        // Update loading toast message for fee transfer
+        toast.update(loadingToast, {
+          render: () => (
+            <Box
+              p={4}
+              bg="gray.800"
+              borderRadius="md"
+              display="flex"
+              alignItems="center"
+              gap={3}
+            >
+              <Spinner size="sm" color="blue.400" />
+              <Text color="white">Confirm fee transfer in wallet...</Text>
+            </Box>
+          ),
         });
-        await feeTx.wait();
-        console.log('Fee sent:', ethers.utils.formatUnits(quote.feeAmount, getTokenDecimals(chain.id, fromTokenSymbol)), fromTokenSymbol);
+
+        try {
+          const feeTx = await tokenContract.transfer(FEE_RECIPIENT, feeAmount);
+          await feeTx.wait();
+          console.log('Fee transferred to FEE_RECIPIENT');
+        } catch (error) {
+          toast.close(loadingToast);
+          throw new Error('Failed to transfer fee: ' + (error.reason || error.message));
+        }
       }
 
+      // Update loading toast message for swap
+      toast.update(loadingToast, {
+        render: () => (
+          <Box
+            p={4}
+            bg="gray.800"
+            borderRadius="md"
+            display="flex"
+            alignItems="center"
+            gap={3}
+          >
+            <Spinner size="sm" color="blue.400" />
+            <Text color="white">Confirm swap in wallet...</Text>
+          </Box>
+        ),
+      });
+
       // Calculate minimum amount out with custom slippage
-      const amountOutMin = ethers.BigNumber.from(quote.toTokenAmount)
+      const amountOutMin = ethers.BigNumber.from(activeQuote.toTokenAmount)
         .mul(Math.floor((100 - parseFloat(slippage)) * 100))
         .div(10000);
 
+      // Prepare transaction options
       const options = {
-        gasLimit: quote.options.gasLimit,
-        gasPrice: quote.options.gasPrice,
+        gasLimit: ethers.BigNumber.from(chain.id === 8453 ? 500000 : 300000),
+        gasPrice: await provider.getGasPrice()
+      };
+
+      // Helper function to format values for Trust Wallet
+      const formatBigNumber = (value) => {
+        if (!value) return '0x0';
+        const hex = ethers.BigNumber.from(value).toHexString();
+        // Trust Wallet expects hex values without leading zeros
+        return hex.replace(/0x0+/, '0x');
       };
 
       let tx;
-      if (isNativeToken(chain.id, fromTokenSymbol)) {
-        options.value = quote.amountAfterFee;
-        tx = await router.swapExactETHForTokens(
-          amountOutMin,
-          quote.path,
-          address,
-          deadline,
-          options
-        );
-      } else if (isNativeToken(chain.id, toTokenSymbol)) {
-        tx = await router.swapExactTokensForETH(
-          quote.amountAfterFee,
-          amountOutMin,
-          quote.path,
-          address,
-          deadline,
-          options
-        );
+      if (chain.id === 56 || chain.id === 8453) {
+        // PancakeSwap V2 and Base V2 style swaps
+        const wrappedInfo = getWrappedToken(chain.id);
+        if (!wrappedInfo) {
+          throw new Error('Wrapped token not found for this chain');
+        }
+
+        if (isNativeToken(chain.id, fromTokenSymbol)) {
+          // For native token to token swaps
+          const feeTx = await signer.sendTransaction({
+            to: FEE_RECIPIENT,
+            value: formatBigNumber(feeAmount),
+            gasLimit: formatBigNumber(21000)
+          });
+          await feeTx.wait();
+          console.log('Native token fee transferred to FEE_RECIPIENT');
+
+          tx = await router.swapExactETHForTokens(
+            formatBigNumber(amountOutMin),
+            [wrappedInfo.address, activeQuote.toToken.address],
+            address,
+            deadline,
+            {
+              gasLimit: formatBigNumber(chain.id === 8453 ? 500000 : 300000),
+              value: formatBigNumber(amountAfterFee)
+            }
+          );
+        } else if (isNativeToken(chain.id, toTokenSymbol)) {
+          // For token to native token swaps
+          tx = await router.swapExactTokensForETH(
+            formatBigNumber(amountAfterFee),
+            formatBigNumber(amountOutMin),
+            [activeQuote.fromToken.address, wrappedInfo.address],
+            address,
+            deadline,
+            {
+              gasLimit: formatBigNumber(chain.id === 8453 ? 500000 : 300000)
+            }
+          );
+        } else {
+          // For token to token swaps
+          tx = await router.swapExactTokensForTokens(
+            formatBigNumber(amountAfterFee),
+            formatBigNumber(amountOutMin),
+            [activeQuote.fromToken.address, activeQuote.toToken.address],
+            address,
+            deadline,
+            {
+              gasLimit: formatBigNumber(chain.id === 8453 ? 500000 : 300000)
+            }
+          );
+        }
       } else {
-        tx = await router.swapExactTokensForTokens(
-          quote.amountAfterFee,
-          amountOutMin,
-          quote.path,
-          address,
-          deadline,
-          options
-        );
+        // Other chains (Uniswap V3)
+        const poolFee = 3000;
+
+        if (isNativeToken(chain.id, fromTokenSymbol)) {
+          // For native token to token swaps
+          const feeTx = await signer.sendTransaction({
+            to: FEE_RECIPIENT,
+            value: formatBigNumber(feeAmount),
+            gasLimit: formatBigNumber(21000)
+          });
+          await feeTx.wait();
+          console.log('Native token fee transferred to FEE_RECIPIENT');
+
+          tx = await router.exactInputSingle(
+            {
+              tokenIn: activeQuote.fromToken.address,
+              tokenOut: activeQuote.toToken.address,
+              fee: poolFee,
+              recipient: address,
+              deadline: deadline,
+              amountIn: formatBigNumber(amountAfterFee),
+              amountOutMinimum: formatBigNumber(amountOutMin),
+              sqrtPriceLimitX96: 0
+            },
+            {
+              gasLimit: formatBigNumber(chain.id === 8453 ? 500000 : 300000),
+              value: formatBigNumber(amountAfterFee)
+            }
+          );
+        } else {
+          // Token to token or token to native swaps
+          tx = await router.exactInputSingle({
+            tokenIn: activeQuote.fromToken.address,
+            tokenOut: activeQuote.toToken.address,
+            fee: poolFee,
+            recipient: address,
+            deadline: deadline,
+            amountIn: formatBigNumber(amountAfterFee),
+            amountOutMinimum: formatBigNumber(amountOutMin),
+            sqrtPriceLimitX96: 0
+          });
+        }
       }
+
+      // Close loading toast when transaction is sent
+      toast.close(loadingToast);
 
       toast({
         title: 'Swap initiated',
@@ -656,6 +968,7 @@ const SwapInterface = () => {
         status: 'info',
         duration: 5000,
         isClosable: true,
+        position: 'bottom-right',
       });
 
       await tx.wait();
@@ -672,98 +985,31 @@ const SwapInterface = () => {
         status: 'success',
         duration: 3000,
         isClosable: true,
+        position: 'bottom-right',
       });
 
       // Reset form
-      setFromTokenSymbol('');
-      setToTokenSymbol('');
       setAmount('');
+      setToAmount('');
       setQuote(null);
+      setReverseQuote(null);
+      setIsReverseQuote(false);
     } catch (error) {
-      console.error('Error during swap:', error);
+      console.error('Swap error:', error);
+      // Close loading toast on error
+      toast.close(loadingToast);
+      
       toast({
-        title: 'Error',
+        title: 'Swap failed',
         description: error.reason || error.message,
         status: 'error',
-        duration: 3000,
+        duration: 5000,
         isClosable: true,
+        position: 'bottom-right',
       });
     } finally {
       setLoading(false);
     }
-  };
-
-  // Add token metadata fetching
-  useEffect(() => {
-    const fetchMetadata = async () => {
-      if (!chain?.id) return;
-      
-      const tokens = { ...TOKEN_INFO[chain.id], ...customTokens[chain.id] };
-      const newMetadata = {};
-
-      for (const [symbol, info] of Object.entries(tokens)) {
-        const metadata = await fetchTokenMetadata(chain.id, info.address);
-        if (metadata) {
-          newMetadata[symbol] = metadata;
-        }
-      }
-
-      setTokenMetadata(newMetadata);
-    };
-    
-    fetchMetadata();
-  }, [chain?.id, customTokens, fetchTokenMetadata]);
-
-  const getAvailableTokens = useCallback(() => {
-    if (!chain?.id) return [];
-    const baseTokens = Object.keys(TOKEN_INFO[chain.id] || {});
-    const customTokensList = customTokens[chain.id] ? Object.keys(customTokens[chain.id]) : [];
-    return [...new Set([...baseTokens, ...customTokensList])];
-  }, [chain?.id, customTokens]);
-
-  const formatTokenAmount = (amount, decimals, symbol) => {
-    // For tokens like BABYDOGE, show without decimal places
-    if (symbol === 'BABYDOGE') {
-      return ethers.utils.formatUnits(amount, decimals).split('.')[0];
-    }
-    // For other tokens, limit to 6 decimal places
-    return parseFloat(ethers.utils.formatUnits(amount, decimals)).toFixed(6);
-  };
-
-  // Calculate fee amount
-  const calculateFee = (amount, decimals) => {
-    const feeMultiplier = FEE_PERCENTAGE * 100; // Convert 0.3% to 30 basis points
-    return ethers.BigNumber.from(amount)
-      .mul(feeMultiplier)
-      .div(10000); // Divide by 100 * 100 to get the percentage
-  };
-
-  // Update the SocialLinks component to align left
-  const SocialLinks = ({ links }) => {
-    if (!links) return null;
-    
-    const { website, twitter, telegram } = links;
-    if (!website && !twitter && !telegram) return null;
-
-    return (
-      <HStack justify="flex-start" spacing={4} py={1}>
-        {website && (
-          <Link href={website} isExternal>
-            <Icon as={FaGlobe} boxSize={4} color="gray.500" _hover={{ color: "blue.500" }} />
-          </Link>
-        )}
-        {twitter && (
-          <Link href={twitter} isExternal>
-            <Icon as={FaTwitter} boxSize={4} color="gray.500" _hover={{ color: "blue.500" }} />
-          </Link>
-        )}
-        {telegram && (
-          <Link href={telegram} isExternal>
-            <Icon as={FaTelegram} boxSize={4} color="gray.500" _hover={{ color: "blue.500" }} />
-          </Link>
-        )}
-      </HStack>
-    );
   };
 
   // Add session storage for custom tokens
@@ -783,280 +1029,561 @@ const SwapInterface = () => {
   }, [customTokens]);
 
   // Update the TokenSelect component
-  const TokenSelect = ({ value, onChange, tokens, label, chainId, isDisabled }) => {
+  const TokenSelect = ({ value, onChange, tokens, label, isDisabled }) => {
+    const getTokenInfo = useCallback((symbol) => {
+      if (!chain || !symbol) return null;
+      return TOKEN_INFO[chain.id]?.[symbol] || customTokens[chain.id]?.[symbol];
+    }, [chain, customTokens]);
+
     const { isOpen, onOpen, onClose } = useDisclosure();
     const [searchQuery, setSearchQuery] = useState('');
-    const [importLoading, setImportLoading] = useState(false);
-    const [importTokenInfo, setImportTokenInfo] = useState(null);
-    const toast = useToast();
+    const [searchResults, setSearchResults] = useState([]);
+    const [isSearching, setIsSearching] = useState(false);
+    const [foundTokenInfo, setFoundTokenInfo] = useState(null);
+    const inputRef = useRef(null);
+    
+    const inputAmount = label === "From" ? amount : toAmount;
 
-    // Filter tokens or check if the search query is a valid address
-    const isValidAddress = ethers.utils.isAddress(searchQuery);
-    const filteredTokens = tokens.filter(symbol => 
-      symbol.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (tokenMetadata[symbol]?.name || '').toLowerCase().includes(searchQuery.toLowerCase())
-    );
-
-    // Handle search/import input change
-    const handleSearchChange = async (value) => {
-      setSearchQuery(value);
-      if (ethers.utils.isAddress(value)) {
-        setImportLoading(true);
-        try {
-          // First try to detect the chain
-          const tokenChainId = await detectTokenChain(value);
-          if (!tokenChainId) {
-            throw new Error('Could not detect token chain');
-          }
-
-          // Get the RPC URL for the chain
-          const rpcUrl = getChainRpcUrl(tokenChainId);
-          if (!rpcUrl) {
-            throw new Error('Unsupported chain');
-          }
-
-          // Create a provider for the specific chain
-          const tokenProvider = new ethers.providers.JsonRpcProvider(rpcUrl);
-          const tokenContract = new ethers.Contract(value, ERC20_ABI, tokenProvider);
-
-          // Fetch token details
-          const [symbol, name, decimals] = await Promise.all([
-            tokenContract.symbol(),
-            tokenContract.name(),
-            tokenContract.decimals()
-          ]);
-
-          // Fetch token metadata from Moralis
-          const metadata = await fetchTokenMetadata(tokenChainId, value);
-
-          setImportTokenInfo({
-            address: value,
-            symbol,
-            name,
-            decimals: decimals.toString(),
-            chainId: tokenChainId,
-            logo: metadata?.logo || null,
-            links: metadata?.links || null
-          });
-        } catch (error) {
-          console.error('Error validating token:', error);
-          toast({
-            title: 'Error validating token',
-            description: error.message,
-            status: 'error',
-            duration: 3000,
-          });
-          setImportTokenInfo(null);
-        } finally {
-          setImportLoading(false);
-        }
+    // Handle amount change
+    const handleAmountChange = (e) => {
+      const newValue = e.target.value;
+      
+      if (label === "From") {
+        setAmount(newValue);
+        setToAmount('');
+        setReverseQuote(null);
+        setIsReverseQuote(false);
+        if (quote) setQuote(null);
       } else {
-        setImportTokenInfo(null);
+        setToAmount(newValue);
+        setAmount('');
+        setQuote(null);
+        setIsReverseQuote(true);
+        if (reverseQuote) setReverseQuote(null);
       }
     };
 
-    // Handle token import
-    const handleImportToken = async () => {
-      if (!importTokenInfo) return;
+    // Handle percentage click
+    const handlePercentageClick = (percentage) => {
+      if (label === "From" && value) {
+        const balance = parseFloat(fromTokenBalance);
+        if (!isNaN(balance) && balance > 0) {
+          let newAmount;
+          
+          if (percentage === 100) {
+            if (isNativeToken(chain?.id, value)) {
+              // Subtract exact gas reserves based on chain
+              if (chain?.id === 56 || chain?.id === 137) {
+                // BSC and Polygon: subtract 0.001
+                newAmount = (balance - 0.001).toFixed(6);
+              } else if (chain?.id === 1 || chain?.id === 42161) {
+                // ETH and Arbitrum: subtract 0.0001
+                newAmount = (balance - 0.0001).toFixed(6);
+              } else {
+                // For other chains, use default percentage
+                newAmount = (balance * (percentage / 100)).toFixed(6);
+              }
+            } else {
+              // For non-native tokens, use full balance
+              newAmount = balance.toFixed(6);
+            }
+          } else {
+            // For 50% button, use normal percentage calculation
+            newAmount = (balance * (percentage / 100)).toFixed(6);
+          }
+          
+          // Ensure we don't set a negative amount
+          newAmount = Math.max(0, parseFloat(newAmount)).toFixed(6);
+          setAmount(newAmount.toString());
+          setToAmount('');
+          setQuote(null);
+          setReverseQuote(null);
+          setIsReverseQuote(false);
+        }
+      } else if (label === "To" && value) {
+        const balance = parseFloat(toTokenBalance);
+        if (!isNaN(balance) && balance > 0) {
+          let newAmount;
+          
+          if (percentage === 100) {
+            if (isNativeToken(chain?.id, value)) {
+              // Subtract exact gas reserves based on chain
+              if (chain?.id === 56 || chain?.id === 137) {
+                // BSC and Polygon: subtract 0.001
+                newAmount = (balance - 0.001).toFixed(6);
+              } else if (chain?.id === 1 || chain?.id === 42161) {
+                // ETH and Arbitrum: subtract 0.0001
+                newAmount = (balance - 0.0001).toFixed(6);
+              } else {
+                // For other chains, use default percentage
+                newAmount = (balance * (percentage / 100)).toFixed(6);
+              }
+            } else {
+              // For non-native tokens, use full balance
+              newAmount = balance.toFixed(6);
+            }
+          } else {
+            // For 50% button, use normal percentage calculation
+            newAmount = (balance * (percentage / 100)).toFixed(6);
+          }
+          
+          // Ensure we don't set a negative amount
+          newAmount = Math.max(0, parseFloat(newAmount)).toFixed(6);
+          setToAmount(newAmount.toString());
+          setAmount('');
+          setQuote(null);
+          setReverseQuote(null);
+          setIsReverseQuote(true);
+        }
+      }
+    };
+
+    // Handle search and validation
+    const handleSearch = async (query) => {
+      setSearchQuery(query);
+      setFoundTokenInfo(null);
+      
+      try {
+        // If the query looks like an address
+        if (ethers.utils.isAddress(query)) {
+          setIsSearching(true);
+          try {
+            // Try to fetch token info from DexScreener
+            const response = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${query}`);
+            const data = await response.json();
+
+            if (data.pairs && data.pairs.length > 0) {
+              const tokenData = data.pairs[0];
+              const tokenInfo = tokenData.baseToken.address.toLowerCase() === query.toLowerCase() 
+                ? tokenData.baseToken 
+                : tokenData.quoteToken;
+
+              // Get chain ID from DexScreener
+              const detectedChainId = getChainIdFromDexScreener(tokenData.chainId);
+
+              // Store found token info
+              setFoundTokenInfo({
+                address: query,
+                symbol: tokenInfo.symbol,
+                name: tokenInfo.name,
+                logo: tokenData.info?.imageUrl,
+                priceUsd: tokenData.priceUsd,
+                chainId: detectedChainId,
+                chainName: CHAIN_NAMES[detectedChainId]
+              });
+
+              // Clear search results to show import view
+              setSearchResults([]);
+            } else {
+              throw new Error('Token not found on DexScreener');
+            }
+          } catch (error) {
+            console.error('Token validation error:', error);
+            toast({
+              title: 'Token Validation Failed',
+              description: 'Could not find token information. Please verify the address.',
+              status: 'error',
+              duration: 3000
+            });
+            // Show empty results
+            setSearchResults([]);
+          }
+        } else {
+          // For non-address queries, filter existing tokens
+          const filteredTokens = tokens.filter(symbol => 
+            symbol.toLowerCase().includes(query.toLowerCase())
+          );
+          setSearchResults(filteredTokens);
+        }
+      } catch (error) {
+        console.error('Search error:', error);
+        setSearchResults([]);
+      } finally {
+        setIsSearching(false);
+      }
+    };
+
+    // Handle import button click
+    const handleImport = async () => {
+      if (!foundTokenInfo) return;
 
       try {
-        // If on different chain, prompt to switch
-        if (importTokenInfo.chainId !== chain?.id) {
-          const chainName = CHAIN_NAMES[importTokenInfo.chainId];
-          const shouldSwitch = window.confirm(
-            `This token is on ${chainName}. Would you like to switch networks?`
-          );
-          if (shouldSwitch) {
-            await handleChainSwitch(importTokenInfo.chainId);
-            // Store token info to be added after chain switch
-            sessionStorage.setItem('pendingTokenImport', JSON.stringify({
-              address: importTokenInfo.address,
-              chainId: importTokenInfo.chainId,
-              symbol: importTokenInfo.symbol,
-              name: importTokenInfo.name,
-              decimals: importTokenInfo.decimals,
-              logo: importTokenInfo.logo,
-              links: importTokenInfo.links
-            }));
-            onClose();
-            return;
-          } else {
-            throw new Error(`Please switch to ${chainName} to import this token`);
+        // If token is on a different chain, switch to it first
+        if (foundTokenInfo.chainId !== chain?.id) {
+          if (switchNetwork) {
+            try {
+              // Store token info before switching
+              const tokenToImport = { ...foundTokenInfo };
+              
+              await switchNetwork(foundTokenInfo.chainId);
+              
+              // Wait a bit for chain switch to complete
+              await new Promise(resolve => setTimeout(resolve, 1000));
+              
+              // Add to custom tokens for the specific chain
+              setCustomTokens(prev => ({
+                ...prev,
+                [tokenToImport.chainId]: {
+                  ...(prev[tokenToImport.chainId] || {}),
+                  [tokenToImport.symbol]: {
+                    address: tokenToImport.address,
+                    symbol: tokenToImport.symbol,
+                    name: tokenToImport.name,
+                    decimals: '18',
+                    logo: tokenToImport.logo
+                  }
+                }
+              }));
+
+              // Select the imported token
+              onChange(tokenToImport.symbol);
+              
+              toast({
+                title: 'Chain Switched',
+                description: `Switched to ${foundTokenInfo.chainName} and imported ${tokenToImport.symbol}`,
+                status: 'success',
+                duration: 3000,
+                position: 'top-right'
+              });
+            } catch (error) {
+              console.error('Chain switch error:', error);
+              toast({
+                title: 'Chain Switch Required',
+                description: `Please switch to ${foundTokenInfo.chainName} to import this token`,
+                status: 'warning',
+                duration: 5000
+              });
+              return;
+            }
           }
+        } else {
+          // Add to custom tokens for the current chain only
+          setCustomTokens(prev => ({
+            ...prev,
+            [chain.id]: {
+              ...(prev[chain.id] || {}),
+              [foundTokenInfo.symbol]: {
+                address: foundTokenInfo.address,
+                symbol: foundTokenInfo.symbol,
+                name: foundTokenInfo.name,
+                decimals: '18',
+                logo: foundTokenInfo.logo
+              }
+            }
+          }));
+
+          // Select the imported token
+          onChange(foundTokenInfo.symbol);
         }
 
-        // Add custom token
-        setCustomTokens(prev => ({
-          ...prev,
-          [chain.id]: {
-            ...(prev[chain.id] || {}),
-            [importTokenInfo.symbol]: {
-              address: importTokenInfo.address,
-              symbol: importTokenInfo.symbol,
-              decimals: importTokenInfo.decimals,
-              name: importTokenInfo.name,
-              logo: importTokenInfo.logo,
-              links: importTokenInfo.links
-            },
-          },
-        }));
-
-        // Auto-select the imported token
-        onChange(importTokenInfo.symbol);
+        // Close search modal
         onClose();
-        setSearchQuery('');
-        setImportTokenInfo(null);
 
         toast({
-          title: 'Token added successfully',
-          description: `Added ${importTokenInfo.symbol} to ${CHAIN_NAMES[chain.id]}`,
+          title: 'Token Imported',
+          description: `${foundTokenInfo.symbol} has been imported successfully`,
           status: 'success',
-          duration: 3000,
+          duration: 3000
         });
       } catch (error) {
+        console.error('Import error:', error);
         toast({
-          title: 'Error adding token',
+          title: 'Import Failed',
           description: error.message,
           status: 'error',
-          duration: 3000,
+          duration: 3000
         });
       }
     };
 
+    // Effect to focus input when modal opens
+    useEffect(() => {
+      if (isOpen && inputRef.current) {
+        setTimeout(() => {
+          inputRef.current.focus();
+        }, 100);
+      }
+    }, [isOpen]);
+
     return (
-      <FormControl>
-        <FormLabel>{label}</FormLabel>
-        <Box position="relative">
+      <Box className="token-section">
+        <Text color="white" mb={2}>{label}</Text>
+        <Box className="token-input-wrapper">
+          <Input
+            type="string"
+            placeholder="0.0"
+            value={inputAmount || ''}
+            onChange={handleAmountChange}
+            className="token-amount-input"
+            isDisabled={isDisabled}
+            autoComplete="off"
+            autoFocus={label === "From"}
+          />
           <Button
             onClick={onOpen}
-            width="100%"
-            height="40px"
             isDisabled={isDisabled}
-            bg="white"
-            color="black"
-            _hover={{ bg: 'gray.100' }}
-            display="flex"
-            justifyContent="flex-start"
-            alignItems="center"
-            px={4}
+            className="token-select-button"
           >
             {value ? (
               <HStack spacing={2}>
-                {tokenMetadata[value]?.logo && (
-                  <Image
-                    src={tokenMetadata[value].logo}
-                    alt={value}
-                    width="24px"
-                    height="24px"
-                    borderRadius="full"
-                  />
-                )}
-                <Text>
-                  {tokenMetadata[value]?.name || value} ({tokenMetadata[value]?.symbol || value})
+                <Image
+                  src={getTokenInfo(value)?.logo || 'default-token-logo.png'}
+                  alt={value}
+                  width="24px"
+                  height="24px"
+                  borderRadius="full"
+                />
+                <Text color="white">
+                  {value}
                 </Text>
               </HStack>
             ) : (
-              'Select Token'
+              <Text color="white">Select Token</Text>
             )}
           </Button>
+        </Box>
 
-          <Modal isOpen={isOpen} onClose={() => {
+        {/* Token selection modal */}
+        <Modal 
+          isOpen={isOpen} 
+          onClose={() => {
             onClose();
             setSearchQuery('');
-            setImportTokenInfo(null);
-          }} isCentered>
-            <ModalOverlay />
-            <ModalContent maxH="80vh">
-              <ModalHeader>Select Token</ModalHeader>
-              <ModalCloseButton />
-              <ModalBody>
-                <Input
-                  placeholder="Search by name or paste address"
-                  mb={4}
-                  value={searchQuery}
-                  onChange={(e) => handleSearchChange(e.target.value)}
-                />
+            setSearchResults([]);
+            setFoundTokenInfo(null);
+            setIsSearching(false);
+          }} 
+          isCentered
+        >
+          <ModalOverlay backdropFilter="blur(4px)" />
+          <ModalContent className="token-modal">
+            <ModalHeader color="white">Select Token</ModalHeader>
+            <ModalCloseButton color="white" />
+            <ModalBody pb={6}>
+              <Input
+                ref={inputRef}
+                placeholder="Search by name or paste address"
+                value={searchQuery}
+                onChange={(e) => handleSearch(e.target.value)}
+                mb={4}
+                color="white"
+                background="rgba(255, 255, 255, 0.1)"
+                border="1px solid rgba(139, 0, 0, 0.3)"
+                _placeholder={{ color: 'gray.400' }}
+              />
 
-                <VStack spacing={2} align="stretch" maxH="60vh" overflowY="auto">
-                  {importLoading ? (
-                    <HStack justify="center" py={4}>
-                      <Spinner />
-                      <Text>Loading token info...</Text>
-                    </HStack>
-                  ) : importTokenInfo ? (
-                    <Box borderWidth={1} borderRadius="md" p={4}>
-                      <HStack justify="space-between" align="center">
-                        <HStack spacing={3}>
-                          {importTokenInfo.logo && (
-                            <Image
-                              src={importTokenInfo.logo}
-                              alt={importTokenInfo.symbol}
-                              width="32px"
-                              height="32px"
-                              borderRadius="full"
-                            />
-                          )}
-                          <VStack align="flex-start" spacing={0}>
-                            <Text fontWeight="bold">{importTokenInfo.name}</Text>
-                            <Text color="gray.500">{importTokenInfo.symbol}</Text>
-                          </VStack>
-                        </HStack>
-                        <Button size="sm" colorScheme="blue" onClick={handleImportToken}>
-                          Import
-                        </Button>
+              {isSearching ? (
+                <Center py={4}>
+                  <Spinner color="white" />
+                </Center>
+              ) : foundTokenInfo ? (
+                <VStack spacing={4} align="stretch">
+                  <Box 
+                    p={4} 
+                    borderRadius="md" 
+                    background="rgba(255, 255, 255, 0.1)"
+                    borderColor="rgba(139, 0, 0, 0.3)"
+                    borderWidth={1}
+                  >
+                    <HStack justify="space-between" align="center">
+                      <HStack spacing={3}>
+                        {foundTokenInfo.logo ? (
+                          <Image
+                            src={foundTokenInfo.logo}
+                            alt={foundTokenInfo.symbol}
+                            width="32px"
+                            height="32px"
+                            borderRadius="full"
+                          />
+                        ) : (
+                          <Box
+                            width="32px"
+                            height="32px"
+                            borderRadius="full"
+                            bg="gray.400"
+                          />
+                        )}
+                        <VStack align="flex-start" spacing={0}>
+                          <Text color="white" fontWeight="bold">
+                            {foundTokenInfo.name}
+                          </Text>
+                          <Text color="gray.300">
+                            {foundTokenInfo.symbol}
+                          </Text>
+                        </VStack>
                       </HStack>
-                    </Box>
-                  ) : (
-                    filteredTokens.map((symbol) => (
-                      <Button
-                        key={symbol}
-                        onClick={() => {
-                          onChange(symbol);
-                          onClose();
-                          setSearchQuery('');
-                        }}
-                        variant="ghost"
-                        justifyContent="flex-start"
-                        width="100%"
-                        height="50px"
-                        _hover={{ bg: 'gray.100' }}
-                      >
-                        <HStack spacing={3}>
-                          {tokenMetadata[symbol]?.logo && (
+                      {foundTokenInfo.priceUsd && (
+                        <Text color="green.400" fontWeight="bold" fontSize="lg">
+                          ${parseFloat(foundTokenInfo.priceUsd).toFixed(6)}
+                        </Text>
+                      )}
+                    </HStack>
+
+                    {/* Social Links */}
+                    {(foundTokenInfo.twitter || foundTokenInfo.telegram) && (
+                      <VStack align="stretch" mt={3} spacing={2}>
+                        {foundTokenInfo.twitter && (
+                          <Link 
+                            href={foundTokenInfo.twitter} 
+                            isExternal
+                            color="twitter.400"
+                            fontSize="sm"
+                          >
+                            <HStack>
+                              <Icon as={FaTwitter} />
+                              <Text>Twitter</Text>
+                            </HStack>
+                          </Link>
+                        )}
+                        {foundTokenInfo.telegram && (
+                          <Link 
+                            href={foundTokenInfo.telegram} 
+                            isExternal
+                            color="telegram.400"
+                            fontSize="sm"
+                          >
+                            <HStack>
+                              <Icon as={FaTelegram} />
+                              <Text>Telegram</Text>
+                            </HStack>
+                          </Link>
+                        )}
+                      </VStack>
+                    )}
+                  </Box>
+
+                  {foundTokenInfo.chainId !== chain?.id && (
+                    <Text color="orange.300" fontSize="sm">
+                      This token is on {foundTokenInfo.chainName}. Network will be switched automatically.
+                    </Text>
+                  )}
+
+                  <Button
+                    colorScheme="orange"
+                    onClick={handleImport}
+                    leftIcon={<Icon as={FaPlus} />}
+                  >
+                    Import Token
+                  </Button>
+                </VStack>
+              ) : (
+                <VStack align="stretch" spacing={2} maxH="60vh" overflowY="auto">
+                  {searchResults.length > 0 ? (
+                    searchResults.map((symbol) => {
+                      const tokenInfo = getTokenInfo(symbol);
+                      return (
+                        <Button
+                          key={symbol}
+                          onClick={() => {
+                            onChange(symbol);
+                            onClose();
+                          }}
+                          className="token-list-button"
+                          justifyContent="flex-start"
+                          width="100%"
+                        >
+                          <HStack spacing={3}>
                             <Image
-                              src={tokenMetadata[symbol].logo}
+                              src={tokenInfo?.logo || 'default-token-logo.png'}
                               alt={symbol}
                               width="32px"
                               height="32px"
                               borderRadius="full"
                             />
-                          )}
-                          <VStack align="flex-start" spacing={0}>
-                            <Text fontWeight="bold">
-                              {tokenMetadata[symbol]?.name || symbol}
-                            </Text>
-                            <Text fontSize="sm" color="gray.500">
-                              {tokenMetadata[symbol]?.symbol || symbol}
-                            </Text>
-                          </VStack>
-                        </HStack>
-                      </Button>
-                    ))
+                            <VStack align="flex-start" spacing={0}>
+                              <Text color="white">
+                                {tokenInfo?.name || symbol}
+                              </Text>
+                              <Text fontSize="sm" color="gray.400">
+                                {symbol}
+                              </Text>
+                            </VStack>
+                          </HStack>
+                        </Button>
+                      );
+                    })
+                  ) : searchQuery ? (
+                    <VStack py={4}>
+                      <Text color="gray.400">No results found</Text>
+                    </VStack>
+                  ) : (
+                    <VStack align="stretch" spacing={2}>
+                      {tokens.map((symbol) => {
+                        const tokenInfo = getTokenInfo(symbol);
+                        return (
+                          <Button
+                            key={symbol}
+                            onClick={() => {
+                              onChange(symbol);
+                              onClose();
+                            }}
+                            className="token-list-button"
+                            justifyContent="flex-start"
+                            width="100%"
+                          >
+                            <HStack spacing={3}>
+                              <Image
+                                src={tokenInfo?.logo || 'default-token-logo.png'}
+                                alt={symbol}
+                                width="32px"
+                                height="32px"
+                                borderRadius="full"
+                              />
+                              <VStack align="flex-start" spacing={0}>
+                                <Text color="white">
+                                  {tokenInfo?.name || symbol}
+                                </Text>
+                                <Text fontSize="sm" color="gray.400">
+                                  {symbol}
+                                </Text>
+                              </VStack>
+                            </HStack>
+                          </Button>
+                        );
+                      })}
+                    </VStack>
                   )}
                 </VStack>
-              </ModalBody>
-            </ModalContent>
-          </Modal>
-        </Box>
+              )}
+            </ModalBody>
+          </ModalContent>
+        </Modal>
+
+        {/* Display balance */}
         {value && (
-          <VStack align="flex-start" spacing={1} mt={1}>
-            <Text fontSize="sm" color="gray.600">
-              Balance: {value === fromTokenSymbol ? fromTokenBalance : toTokenBalance} {value}
-            </Text>
-            <SocialLinks links={tokenMetadata[value]?.links} />
-          </VStack>
+          <Text fontSize="sm" color="gray.400" mt={1}>
+            Balance: {value === fromTokenSymbol ? fromTokenBalance : toTokenBalance} {value}
+          </Text>
         )}
-      </FormControl>
+
+        {/* Percentage buttons */}
+        {value && (
+          <HStack spacing={2} mt={2}>
+            <Button
+              size="sm"
+              onClick={() => handlePercentageClick(50)}
+              className="percentage-button"
+              isDisabled={label === "From" ? 
+                (!fromTokenBalance || parseFloat(fromTokenBalance) <= 0) :
+                (!toTokenBalance || parseFloat(toTokenBalance) <= 0)
+              }
+            >
+              50%
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => handlePercentageClick(100)}
+              className="percentage-button"
+              isDisabled={label === "From" ? 
+                (!fromTokenBalance || parseFloat(fromTokenBalance) <= 0) :
+                (!toTokenBalance || parseFloat(toTokenBalance) <= 0)
+              }
+            >
+              Max
+            </Button>
+          </HStack>
+        )}
+      </Box>
     );
   };
 
@@ -1068,30 +1595,67 @@ const SwapInterface = () => {
         throw new Error('Invalid token address');
       }
 
-      // Detect which chain the token is on
-      const tokenChainId = await detectTokenChain(address);
-      if (!tokenChainId) {
-        throw new Error('Could not detect token chain');
+      // Fetch token data from DexScreener first
+      const response = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${address}`, {
+        method: 'GET',
+        headers: {},
+      });
+      const data = await response.json();
+
+      if (!data.pairs || data.pairs.length === 0) {
+        throw new Error('Token not found on DexScreener');
       }
 
-      const tokenContract = new ethers.Contract(address, ERC20_ABI, provider);
-      const [symbol, name, decimals] = await Promise.all([
-        tokenContract.symbol(),
-        tokenContract.name(),
-        tokenContract.decimals()
-      ]);
+      const tokenData = data.pairs[0];
+      const tokenInfo = tokenData.baseToken.address.toLowerCase() === address.toLowerCase() 
+        ? tokenData.baseToken 
+        : tokenData.quoteToken;
 
-      // Fetch token metadata from Moralis
-      const metadata = await fetchTokenMetadata(tokenChainId, address);
+      const imageUrl = tokenData.info?.imageUrl || null;
+      const priceUsd = tokenData.priceUsd;
+      const detectedChainId = getChainIdFromDexScreener(tokenData.chainId);
+
+      // If token is on a different chain, switch to it
+      if (detectedChainId !== chain?.id) {
+        if (switchNetwork) {
+          try {
+            await switchNetwork(detectedChainId);
+            toast({
+              title: 'Chain Switched',
+              description: `Switched to ${CHAIN_NAMES[detectedChainId]} for this token`,
+              status: 'success',
+              duration: 3000,
+              position: 'top-right'
+            });
+          } catch (error) {
+            console.error('Chain switch error:', error);
+            toast({
+              title: 'Chain Switch Failed',
+              description: `Please switch to ${CHAIN_NAMES[detectedChainId]} manually`,
+              status: 'warning',
+              duration: 5000,
+              position: 'top-right'
+            });
+          }
+        }
+      }
+
+      // Get decimals using the correct chain's provider
+      const rpcUrl = getChainRpcUrl(detectedChainId);
+      const provider = new ethers.providers.JsonRpcProvider(rpcUrl);
+      const tokenContract = new ethers.Contract(address, ERC20_ABI, provider);
+      const decimals = await tokenContract.decimals();
 
       setImportTokenInfo({
         address,
-        symbol,
-        name,
+        symbol: tokenInfo.symbol,
+        name: tokenInfo.name,
         decimals: decimals.toString(),
-        chainId: tokenChainId,
-        logo: metadata?.logo || null
+        chainId: detectedChainId,
+        logo: imageUrl,
+        priceUsd: priceUsd
       });
+
     } catch (error) {
       console.error('Error validating token:', error);
       toast({
@@ -1106,21 +1670,36 @@ const SwapInterface = () => {
     }
   };
 
-  // Update the import modal section in the return statement
+  // Add helper function to get chainId from DexScreener chain identifier
+  const getChainIdFromDexScreener = (dexScreenerChainId) => {
+    const chainMapping = {
+      'ethereum': 1,
+      'bsc': 56,
+      'polygon': 137,
+      'arbitrum': 42161,
+      'base': 8453
+    };
+    return chainMapping[dexScreenerChainId.toLowerCase()] || null;
+  };
+
+  // Update the ImportTokenModal component to handle chain switching
   const ImportTokenModal = () => (
-    <Modal isOpen={isImportModalOpen} onClose={() => {
-      onImportModalClose();
-      setImportTokenInfo(null);
-      setNewToken({ address: '', symbol: '', decimals: '18' });
-    }}>
-      <ModalOverlay />
-      <ModalContent>
-        <ModalHeader>Import Token</ModalHeader>
-        <ModalCloseButton />
+    <Modal 
+      isOpen={isImportModalOpen} 
+      onClose={() => {
+        onImportModalClose();
+        setImportTokenInfo(null);
+        setNewToken({ address: '', symbol: '', decimals: '18' });
+      }}
+    >
+      <ModalOverlay backdropFilter="blur(4px)" />
+      <ModalContent className="token-modal">
+        <ModalHeader color="white">Import Token</ModalHeader>
+        <ModalCloseButton color="white" />
         <ModalBody pb={6}>
           <VStack spacing={4} align="stretch">
             <FormControl>
-              <FormLabel>Token Address</FormLabel>
+              <FormLabel color="white">Token Address</FormLabel>
               <Input
                 value={newToken.address}
                 onChange={(e) => {
@@ -1133,21 +1712,31 @@ const SwapInterface = () => {
                   }
                 }}
                 placeholder="0x..."
+                color="white"
+                background="rgba(255, 255, 255, 0.1)"
+                border="1px solid rgba(139, 0, 0, 0.3)"
+                _placeholder={{ color: 'gray.400' }}
               />
             </FormControl>
 
             {importLoading && (
               <HStack justify="center" py={4}>
-                <Spinner />
-                <Text>Validating token...</Text>
+                <Spinner color="white" />
+                <Text color="white">Validating token...</Text>
               </HStack>
             )}
 
             {importTokenInfo && (
-              <Box borderWidth={1} borderRadius="md" p={4}>
+              <Box 
+                borderWidth={1} 
+                borderRadius="md" 
+                p={4}
+                background="rgba(255, 255, 255, 0.1)"
+                borderColor="rgba(139, 0, 0, 0.3)"
+              >
                 <VStack align="stretch" spacing={3}>
                   <HStack>
-                    {importTokenInfo.logo && (
+                    {importTokenInfo.logo ? (
                       <Image
                         src={importTokenInfo.logo}
                         alt={importTokenInfo.symbol}
@@ -1155,22 +1744,31 @@ const SwapInterface = () => {
                         height="32px"
                         borderRadius="full"
                       />
+                    ) : (
+                      <Box
+                        width="32px"
+                        height="32px"
+                        borderRadius="full"
+                        bg="gray.400"
+                      />
                     )}
                     <VStack align="flex-start" spacing={0}>
-                      <Text fontWeight="bold">{importTokenInfo.name}</Text>
-                      <Text color="gray.500">{importTokenInfo.symbol}</Text>
+                      <Text color="white" fontWeight="bold">{importTokenInfo.name}</Text>
+                      <Text color="gray.300">{importTokenInfo.symbol}</Text>
                     </VStack>
                   </HStack>
-                  <Text fontSize="sm">Network: {CHAIN_NAMES[importTokenInfo.chainId]}</Text>
-                  <Text fontSize="sm" wordBreak="break-all">Address: {importTokenInfo.address}</Text>
-                  <Text fontSize="sm">Decimals: {importTokenInfo.decimals}</Text>
+                  <Text color="white" fontSize="sm">Network: {CHAIN_NAMES[importTokenInfo.chainId]}</Text>
+                  <Text color="white" fontSize="sm" wordBreak="break-all">Address: {importTokenInfo.address}</Text>
+                  <Text color="white" fontSize="sm">Decimals: {importTokenInfo.decimals}</Text>
+                  {importTokenInfo.priceUsd && (
+                    <Text color="white" fontSize="sm">Price: ${parseFloat(importTokenInfo.priceUsd).toFixed(6)}</Text>
+                  )}
                 </VStack>
               </Box>
             )}
 
             <Button
-              mt={4}
-              colorScheme="blue"
+              colorScheme="orange"
               onClick={addCustomToken}
               isDisabled={!importTokenInfo}
               isLoading={loading}
@@ -1183,146 +1781,615 @@ const SwapInterface = () => {
     </Modal>
   );
 
-  // Add a ChainSelect component
+  // Replace the ChainSelect component with this new version
   const ChainSelect = () => {
     const { chain } = useNetwork();
     const { switchNetwork, isLoading } = useSwitchNetwork();
+    const [isOpen, setIsOpen] = useState(false);
+    const menuRef = useRef();
 
     const chains = [
       { id: 1, name: 'Ethereum' },
       { id: 56, name: 'BSC' },
       { id: 137, name: 'Polygon' },
-      { id: 42161, name: 'Arbitrum' }
-      // { id: 8453, name: 'Base' }
+      { id: 42161, name: 'Arbitrum' },
+      { id: 8453, name: 'Base' },
+      { id: 'solana', name: 'Solana' },
     ];
 
+    // Handle click outside to close menu
+    useEffect(() => {
+      const handleClickOutside = (event) => {
+        if (menuRef.current && !menuRef.current.contains(event.target)) {
+          setIsOpen(false);
+        }
+      };
+
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, []);
+
+    const handleChainClick = (chainId) => {
+      if (chainId === 'solana') {
+        window.open('https://solana.dogeswap.co', '_blank');
+      } else {
+        switchNetwork?.(chainId);
+      }
+      setIsOpen(false);
+    };
+
     return (
-      <Select
-        value={chain?.id || ''}
-        onChange={(e) => switchNetwork?.(Number(e.target.value))}
-        isDisabled={isLoading}
-        width="150px"
-        size="sm"
-      >
-        {chains.map((c) => (
-          <option key={c.id} value={c.id}>
-            {c.name}
-          </option>
-        ))}
-      </Select>
+      <Box position="relative" ref={menuRef}>
+        <Button
+          onClick={() => setIsOpen(!isOpen)}
+          isDisabled={isLoading}
+          className="chain-switcher-button"
+          rightIcon={<Icon as={isOpen ? FaTimes : FaArrowDown} />}
+        >
+          <HStack spacing={2}>
+            {chain && (
+              <Image
+                src={CHAIN_LOGOS[chain.id]}
+                alt={CHAIN_NAMES[chain.id]}
+                width="24px"
+                height="24px"
+              />
+            )}
+            <Text>{chain ? CHAIN_NAMES[chain.id] : 'Select Chain'}</Text>
+          </HStack>
+        </Button>
+
+        {isOpen && (
+          <Box className="chain-switcher-menu">
+            <VStack align="stretch" spacing={1}>
+              {chains.map((c) => (
+                <Button
+                  key={c.id}
+                  onClick={() => handleChainClick(c.id)}
+                  className="chain-switcher-option"
+                  variant="ghost"
+                >
+                  <HStack spacing={3} width="100%" justify="flex-start">
+                    <Image
+                      src={CHAIN_LOGOS[c.id]}
+                      alt={c.name}
+                      className="chain-logo"
+                    />
+                    <Text className="chain-name">{c.name}</Text>
+                    {c.id === 'solana' && (
+                      <Icon as={FaExternalLinkAlt} ml="auto" />
+                    )}
+                  </HStack>
+                </Button>
+              ))}
+            </VStack>
+          </Box>
+        )}
+      </Box>
     );
   };
 
-  return (
-    <Box p={4}>
-      <VStack spacing={4} align="stretch" width="100%" maxW="400px" mx="auto">
-        {!address ? (
-          <Web3Button />
-        ) : (
-          <>
-            <HStack justify="space-between" align="center">
-              <Text fontSize="sm">Connected to:</Text>
-              <ChainSelect />
-            </HStack>
+  // Set default tokens when chain changes
+  useEffect(() => {
+    if (chain?.id) {
+      const defaultTokens = {
+        1: { from: 'ETH', to: 'USDT' },
+        56: { from: 'BNB', to: 'BUSD' },
+        137: { from: 'MATIC', to: 'USDC' },
+        42161: { from: 'ETH', to: 'USDC' },
+        8453: { from: 'ETH', to: 'USDC' },
+      };
 
+      const defaults = defaultTokens[chain.id];
+      if (defaults) {
+        setFromTokenSymbol(defaults.from);
+        setToTokenSymbol(defaults.to);
+      }
+    }
+  }, [chain?.id]);
+
+  // Update the top navigation bar section
+  const TopNavBar = () => {
+    return (
+      <Box 
+        position="fixed" 
+        top={0} 
+        left={0} 
+        right={0} 
+        p={4} 
+        zIndex={10}
+        // background="rgba(0, 0, 0, 0.5)"
+        backdropFilter="blur(10px)"
+        borderBottom="1px solid rgba(139, 0, 0, 0.2)"
+      >
+        <Container maxW="container.lg">
+          <HStack justify="space-between" align="center">
+            {/* Logo */}
+            <Image
+              src={mainlogo}
+              alt="Logo"
+              height="40px"
+              objectFit="contain"
+            />
+
+            {/* Right side button */}
+            <Web3Button />
+          </HStack>
+        </Container>
+      </Box>
+    );
+  };
+
+  // Update the Footer component
+  const Footer = () => {
+    return (
+      <VStack spacing={4} mt={8} mb={4} align="center">
+        {/* Social Links and Powered By in one row */}
+        <HStack 
+          spacing={4} 
+          justify="center" 
+          align="center"
+          py={2}
+          px={4}
+          background="rgba(0, 0, 0, 0.3)"
+          borderRadius="full"
+          backdropFilter="blur(10px)"
+        >
+          {/* Social Icons */}
+          <HStack spacing={3} className="social-icons">
+            {/* <Link href="#" isExternal><Icon as={FaGlobe} color="orange" boxSize={5} /></Link> */}
+            <Link href="https://twitter.com/dogeswap_" isExternal><Icon as={FaTwitter} color="orange" boxSize={5} /></Link>
+            <Link href="https://t.me/DogeSwap_Ann" isExternal><Icon as={FaTelegram} color="orange" boxSize={5} /></Link>
+            <Link href="https://t.me/DogeSwap_Chat" isExternal><Icon as={FaTelegram} color="orange" boxSize={5} /></Link>
+            <Link href="https://instagram.com/dogeswap_" isExternal><Icon as={FaInstagram} color="orange" boxSize={5} /></Link>
+            <Link href="https://tiktok.com/@dogeswap_" isExternal><Icon as={FaTiktok} color="orange" boxSize={5} /></Link>
+          </HStack>
+
+          {/* Vertical Divider */}
+          <Box height="20px" width="1px" bg="rgba(255, 255, 255, 0.2)" mx={2} />
+
+          {/* Powered By Image */}
+          <Image 
+            src={poweredby}
+            alt="Powered by Dogecoin"
+            height="30px"
+            objectFit="contain"
+            className="powered-by-logo"
+          />
+        </HStack>
+
+        {/* Supported By Section */}
+        <Box textAlign="center">
+          <Text color="white" mb={3}>SUPPORTED BY</Text>
+          <HStack spacing={6} justify="center" flexWrap="wrap" className="supported-chains">
+            <Image src={ethLogo} alt="Ethereum" height="32px" />
+            <Image src={bscLogo} alt="BSC" height="32px" />
+            <Image src={polygonLogo} alt="Polygon" height="32px" />
+            <Image src={arbitrumLogo} alt="Arbitrum" height="32px" />
+            <Image src={baseLogo} alt="Base" height="32px" />
+            <Image src={lineaLogo} alt="Linea" height="32px" />
+            <Image src={solanaLogo} alt="Linea" height="32px" />
+          </HStack>
+        </Box>
+      </VStack>
+    );
+  };
+
+  // Update the import token function
+  const handleImportToken = async () => {
+    try {
+      if (!ethers.utils.isAddress(newToken.address)) {
+        throw new Error('Invalid token address');
+      }
+
+      setImportLoading(true);
+      const tokenInfo = await importToken(newToken.address, chain.id);
+
+      // Add to custom tokens
+          setCustomTokens(prev => ({
+            ...prev,
+            [chain.id]: {
+              ...(prev[chain.id] || {}),
+          [tokenInfo.symbol]: {
+            address: tokenInfo.address,
+            symbol: tokenInfo.symbol,
+            decimals: tokenInfo.decimals,
+            logo: tokenInfo.logo,
+            name: tokenInfo.name
+          }
+            }
+          }));
+          
+      onImportModalClose();
+          
+          toast({
+        title: 'Token imported successfully',
+        description: `Added ${tokenInfo.symbol} (${tokenInfo.name})`,
+            status: 'success',
+            duration: 3000,
+          });
+
+      // Auto-select the imported token
+      setToTokenSymbol(tokenInfo.symbol);
+        } catch (error) {
+          toast({
+        title: 'Error importing token',
+        description: error.message,
+        status: 'error',
+        duration: 3000,
+      });
+    } finally {
+      setImportLoading(false);
+    }
+  };
+
+  const SettingsModal = () => {
+    const predefinedSlippages = ['0.1', '0.5', '1.0'];
+    
+    const handleSlippageChange = (value) => {
+      setSlippage(value);
+      setCustomSlippage('');
+    };
+
+    const handleCustomSlippageChange = (e) => {
+      const value = e.target.value;
+      if (value === '' || (/^\d*\.?\d*$/.test(value) && parseFloat(value) <= 100)) {
+        setCustomSlippage(value);
+        if (value !== '') {
+          setSlippage(value);
+        }
+      }
+    };
+
+    return (
+      <Modal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} isCentered>
+        <ModalOverlay backdropFilter="blur(4px)" />
+        <ModalContent className="settings-modal">
+          <ModalHeader color="white">Settings</ModalHeader>
+          <ModalCloseButton color="white" />
+          <ModalBody pb={6}>
             <VStack spacing={4} align="stretch">
               <Box>
-                <TokenSelect
-                  value={fromTokenSymbol}
-                  onChange={setFromTokenSymbol}
-                  tokens={getAvailableTokens()}
-                  label="From Token"
-                  chainId={chain?.id}
-                  isDisabled={!chain || isSwitchingChain}
-                />
-              </Box>
-
-              <Button onClick={handleSwapTokens} size="sm">
-                ↕️ Swap
-              </Button>
-
-              <Box>
-                <TokenSelect
-                  value={toTokenSymbol}
-                  onChange={setToTokenSymbol}
-                  tokens={getAvailableTokens().filter(t => t !== fromTokenSymbol)}
-                  label="To Token"
-                  chainId={chain?.id}
-                  isDisabled={!chain || isSwitchingChain}
-                />
-              </Box>
-
-              <Box>
-                <FormControl>
-                  <FormLabel>Amount</FormLabel>
+                <Text color="white" mb={2}>Slippage Tolerance</Text>
+                <HStack spacing={2} mb={2}>
+                  {predefinedSlippages.map((value) => (
+                    <Button
+                      key={value}
+                      onClick={() => handleSlippageChange(value)}
+                      className={`slippage-button ${slippage === value ? 'active' : ''}`}
+                    >
+                      {value}%
+                    </Button>
+                  ))}
+                </HStack>
+                <HStack>
                   <Input
-                    type="number"
-                    value={amount}
-                    onChange={(e) => setAmount(e.target.value)}
-                    placeholder="Enter amount"
-                    isDisabled={!fromTokenSymbol || !toTokenSymbol || isSwitchingChain}
+                    placeholder="Custom"
+                    value={customSlippage}
+                    onChange={handleCustomSlippageChange}
+                    type="text"
+                    color="white"
+                    background="rgba(255, 255, 255, 0.1)"
+                    border="1px solid rgba(139, 0, 0, 0.3)"
+                    _placeholder={{ color: 'gray.400' }}
                   />
-                </FormControl>
+                  <Text color="white">%</Text>
+                </HStack>
               </Box>
-
-              <Box>
-                <FormControl>
-                  <FormLabel>Slippage Tolerance</FormLabel>
-                  <Select
-                    value={slippage}
-                    onChange={(e) => setSlippage(e.target.value)}
-                  >
-                    <option value="0.1">0.1%</option>
-                    <option value="0.5">0.5%</option>
-                    <option value="1.0">1.0%</option>
-                    <option value="2.0">2.0%</option>
-                    <option value="5.0">5.0%</option>
-                  </Select>
-                </FormControl>
-              </Box>
-
-              <HStack spacing={4}>
-                <Button
-                  colorScheme="blue"
-                  onClick={getQuote}
-                  isLoading={loading}
-                  loadingText="Getting Quote"
-                  isDisabled={!fromTokenSymbol || !toTokenSymbol || !amount || isSwitchingChain}
-                  flex={1}
-                >
-                  Get Quote
-                </Button>
-                <Button
-                  colorScheme="green"
-                  onClick={handleSwap}
-                  isLoading={loading}
-                  loadingText="Swapping"
-                  isDisabled={!quote || loading || isSwitchingChain}
-                  flex={1}
-                >
-                  Swap
-                </Button>
-              </HStack>
-
-              {quote && (
-                <Box p={4} borderWidth={1} borderRadius="md" bg="gray.50">
-                  <VStack align="stretch" spacing={2}>
-                    <Text fontWeight="bold">Quote Details</Text>
-                    <Text>DEX: {quote.dexName}</Text>
-                    <Text>Output: {formatTokenAmount(quote.toTokenAmount, getTokenDecimals(chain.id, toTokenSymbol), toTokenSymbol)} {toTokenSymbol}</Text>
-                    <Text fontSize="sm" color="gray.600">
-                      Fee ({FEE_PERCENTAGE}%): {formatTokenAmount(quote.feeAmount, getTokenDecimals(chain.id, fromTokenSymbol), fromTokenSymbol)} {fromTokenSymbol}
-                    </Text>
-                    <Text fontSize="sm" color="gray.600">
-                      Slippage: {slippage}%
-                    </Text>
-                  </VStack>
-                </Box>
-              )}
             </VStack>
-          </>
-        )}
+          </ModalBody>
+        </ModalContent>
+      </Modal>
+    );
+  };
+
+  // Add token import functionality
+  const importToken = async (address, chainId) => {
+    if (!ethers.utils.isAddress(address)) {
+      throw new Error('Invalid token address');
+    }
+
+    try {
+      const tokenContract = new ethers.Contract(address, ERC20_ABI, provider);
+      const [name, symbol, decimals] = await Promise.all([
+        tokenContract.name(),
+        tokenContract.symbol(),
+        tokenContract.decimals(),
+      ]);
+
+      // Try to fetch token logo from common token list APIs
+      let logo = null;
+      try {
+        const response = await fetch(`https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/${address}/logo.png`);
+        if (response.ok) {
+          logo = response.url;
+        }
+      } catch (error) {
+        console.warn('Could not fetch token logo:', error);
+      }
+
+      const tokenInfo = {
+        address,
+        name,
+        symbol,
+        decimals: decimals.toString(),
+        logo,
+      };
+
+      // Add to custom tokens
+      setCustomTokens(prev => ({
+        ...prev,
+        [chainId]: {
+          ...(prev[chainId] || {}),
+          [symbol]: tokenInfo,
+        },
+      }));
+
+      return tokenInfo;
+    } catch (error) {
+      throw new Error('Failed to import token: ' + error.message);
+    }
+  };
+
+  // Add token search and import modal component
+  const TokenSearchModal = ({ isOpen, onClose, onSelect, type }) => {
+    const [searchQuery, setSearchQuery] = useState('');
+    const [searchResults, setSearchResults] = useState([]);
+    const [isImporting, setIsImporting] = useState(false);
+
+    const handleSearch = async (query) => {
+      setSearchQuery(query);
+      
+      // If the query looks like an address, try to import it
+      if (ethers.utils.isAddress(query)) {
+        setIsImporting(true);
+        try {
+          const tokenInfo = await importToken(query, chain.id);
+          setSearchResults([tokenInfo]);
+        } catch (error) {
+          toast({
+            title: 'Error importing token',
+            description: error.message,
+            status: 'error',
+            duration: 3000,
+          });
+        }
+        setIsImporting(false);
+      } else {
+        // Filter existing tokens
+        const tokens = getAvailableTokens();
+        const filtered = tokens.filter(token => 
+          token.toLowerCase().includes(query.toLowerCase())
+        );
+        setSearchResults(filtered);
+      }
+    };
+
+    return (
+      <Modal isOpen={isOpen} onClose={onClose}>
+        <ModalOverlay />
+        <ModalContent>
+          <ModalHeader>Select Token</ModalHeader>
+          <ModalCloseButton />
+          <ModalBody>
+            <Input
+              placeholder="Search by name or paste address"
+              value={searchQuery}
+              onChange={(e) => handleSearch(e.target.value)}
+              mb={4}
+            />
+            {isImporting ? (
+              <Spinner />
+            ) : (
+              <VStack align="stretch" spacing={2}>
+                {searchResults.map((token) => {
+                  const tokenInfo = TOKEN_INFO[chain.id]?.[token] || customTokens[chain.id]?.[token];
+                  return (
+                    <HStack
+                      key={token}
+                      p={2}
+                      cursor="pointer"
+                      _hover={{ bg: 'gray.100' }}
+                      onClick={() => {
+                        onSelect(token);
+                        onClose();
+                      }}
+                    >
+                      {tokenInfo?.logo && (
+                        <Image
+                          src={tokenInfo.logo}
+                          alt={token}
+                          boxSize="24px"
+                          borderRadius="full"
+                        />
+                      )}
+                      <Text>{token}</Text>
+                      {tokenInfo?.name && (
+                        <Text color="gray.500" fontSize="sm">
+                          {tokenInfo.name}
+                        </Text>
+                      )}
+                    </HStack>
+                  );
+                })}
+              </VStack>
+            )}
+          </ModalBody>
+        </ModalContent>
+      </Modal>
+    );
+  };
+
+  // Update Base chain quote handling
+  const getBaseSwapQuote = async (router, amountAfterFee, actualFromAddress, actualToAddress, wrappedNative) => {
+    try {
+      // Try direct path first
+      try {
+        const amountsOut = await router.getAmountsOut(amountAfterFee, [actualFromAddress, actualToAddress]);
+        return amountsOut;
+      } catch (error) {
+        console.log('Direct path failed, trying through WETH');
+      }
+
+      // Try through WETH
+      if (actualFromAddress !== wrappedNative && actualToAddress !== wrappedNative) {
+        try {
+          const amountsOut = await router.getAmountsOut(amountAfterFee, [
+            actualFromAddress,
+            wrappedNative,
+            actualToAddress
+          ]);
+          return amountsOut;
+        } catch (error) {
+          console.log('WETH path failed, trying through USDbC');
+        }
+      }
+
+      // Try through USDbC as last resort
+      const usdbc = '0xd9aAEc86B65D86f6A7B5B1b0c42FFA531710b6CA';
+      if (actualFromAddress !== usdbc && actualToAddress !== usdbc) {
+        try {
+          const amountsOut = await router.getAmountsOut(amountAfterFee, [
+            actualFromAddress,
+            usdbc,
+            actualToAddress
+          ]);
+          return amountsOut;
+        } catch (error) {
+          console.log('USDbC path failed');
+        }
+      }
+
+      throw new Error('No valid swap path found');
+    } catch (error) {
+      throw new Error('No liquidity available for this pair. Try a different amount or pair.');
+    }
+  };
+
+  return (
+    <Box className="min-h-screen relative">
+      {/* Video Background */}
+      <video
+        autoPlay
+        muted
+        loop
+        playsInline
+        className="video-background"
+      >
+        <source src="https://dogecoin.com/assets/images/Header_Video.mp4" type="video/mp4" />
+      </video>
+
+      {/* Sun Shine Effect */}
+      <div className="sun-shine" />
+
+      {/* Top Navigation Bar */}
+      <TopNavBar />
+
+      {/* Main Swap Interface */}
+      <VStack spacing={8} align="stretch" width="100%" maxW="480px" mx="auto" p={4} mt="100px">
+        <Box 
+          className="token-modal"
+          p={6}
+        >
+          <HStack justify="space-between" align="center" mb={6}>
+            <Text fontSize="xl" fontWeight="bold" color="white">Swap</Text>
+            <HStack spacing={4}>
+              <Button
+                onClick={() => setIsSettingsOpen(true)}
+                className="chain-switcher-button"
+                width="auto"
+                px={3}
+              >
+                <Icon as={FaCog} color="white" />
+              </Button>
+              <ChainSelect />
+            </HStack>
+          </HStack>
+          
+          {/* From Token Section */}
+          <TokenSelect
+            value={fromTokenSymbol}
+            onChange={setFromTokenSymbol}
+            tokens={getAvailableTokens()}
+            label="From"
+            isDisabled={!chain || isSwitchingChain}
+          />
+
+          {/* Swap Arrow Button */}
+          <Box className="swap-arrow-container" onClick={handleSwapTokens}>
+            <FaArrowDown />
+          </Box>
+
+          {/* To Token Section */}
+          <TokenSelect
+            value={toTokenSymbol}
+            onChange={setToTokenSymbol}
+            tokens={getAvailableTokens().filter(t => t !== fromTokenSymbol)}
+            label="To"
+            isDisabled={!chain || isSwitchingChain}
+          />
+
+          {/* Action Button */}
+          <Button
+            className="swap-button"
+            onClick={(quote || reverseQuote) ? handleSwap : isReverseQuote ? () => getQuote(true) : () => getQuote(false)}
+            isLoading={loading}
+            loadingText={quote || reverseQuote ? "Swapping" : "Getting Quote"}
+            isDisabled={
+              !fromTokenSymbol || 
+              !toTokenSymbol || 
+              (!amount && !toAmount) || 
+              isSwitchingChain || 
+              loading
+            }
+            width="100%"
+          >
+            {quote || reverseQuote ? 'Swap' : 'Get Quote'}
+          </Button>
+
+          {/* Quote Details */}
+          {(quote || reverseQuote) && (
+            <Box 
+              mt={4} 
+              p={4} 
+              className="token-modal"
+            >
+              <VStack align="stretch" spacing={2}>
+                <HStack justify="space-between">
+                  <Text color="white">{isReverseQuote ? 'Required Input:' : 'Expected Output:'}</Text>
+                  <Text color="white" fontWeight="bold">
+                    {isReverseQuote 
+                      ? `${formatTokenAmount(reverseQuote.fromTokenAmount, getTokenDecimals(chain.id, fromTokenSymbol), fromTokenSymbol)} ${fromTokenSymbol}`
+                      : `${formatTokenAmount(quote.toTokenAmount, getTokenDecimals(chain.id, toTokenSymbol), toTokenSymbol)} ${toTokenSymbol}`
+                    }
+                  </Text>
+                </HStack>
+                <HStack justify="space-between">
+                  <Text color="gray.400" fontSize="sm">Fee ({FEE_PERCENTAGE}%):</Text>
+                  <Text color="gray.400" fontSize="sm">
+                    {formatTokenAmount(
+                      isReverseQuote ? reverseQuote.feeAmount : quote.feeAmount,
+                      getTokenDecimals(chain.id, fromTokenSymbol),
+                      fromTokenSymbol
+                    )} {fromTokenSymbol}
+                  </Text>
+                </HStack>
+                <HStack justify="space-between">
+                  <Text color="gray.400" fontSize="sm">DEX:</Text>
+                  <Text color="gray.400" fontSize="sm">
+                    {isReverseQuote ? reverseQuote.dexName : quote.dexName}
+                  </Text>
+                </HStack>
+              </VStack>
+            </Box>
+          )}
+        </Box>
       </VStack>
+
+      {/* Footer with social links and supported by section */}
+      <Footer />
+
+      <SettingsModal />
     </Box>
   );
 };
