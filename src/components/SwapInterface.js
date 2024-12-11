@@ -67,13 +67,29 @@ const CHAIN_NAMES = {
   8453: 'Base',
 };
 
+// Update the router addresses to include Base Universal Router
 const ROUTER_ADDRESSES = {
-  1: '0xE592427A0AEce92De3Edee1F18E0157C05861564', // Uniswap V3 Router
+  1: '0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD', // Universal Router Ethereum
   56: '0x10ED43C718714eb63d5aA57B78B54704E256024E', // PancakeSwap
-  137: '0xE592427A0AEce92De3Edee1F18E0157C05861564', // Uniswap V3 Router
-  42161: '0xE592427A0AEce92De3Edee1F18E0157C05861564', // Uniswap V3 Router
-  8453: '0x327Df1E6de05895d2ab08513aaDD9313Fe505d86', // Base Uniswap V2 Router
+  137: '0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD', // Universal Router Polygon
+  42161: '0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD', // Universal Router Arbitrum
+  8453: '0x198EF79F1F515F02dFE9e3115eD9fC07183f02fC', // Universal Router Base
 };
+
+// Add Universal Router ABI
+const UNIVERSAL_ROUTER_ABI = [
+  'function execute(bytes commands, bytes[] inputs, uint256 deadline) payable returns ()',
+  'function executeV2(bytes commands, bytes[] inputs, uint256 deadline) payable returns ()',
+];
+
+// Add Permit2 address
+const PERMIT2_ADDRESS = '0x000000000022D473030F116dDEE9F6B43aC78BA3';
+
+// Add Permit2 ABI
+const PERMIT2_ABI = [
+  'function approve(address token, address spender, uint160 amount, uint48 expiration)',
+  'function allowance(address user, address token, address spender) view returns (uint160 amount, uint48 expiration, uint48 nonce)',
+];
 
 const ROUTER_ABI = [
   // V2 methods
@@ -125,12 +141,24 @@ const QUOTER_ADDRESSES = {
   1: '0x61fFE014bA17989E743c5F6cB21bF9697530B21e',  // QuoterV2
   137: '0x61fFE014bA17989E743c5F6cB21bF9697530B21e', // QuoterV2
   42161: '0x61fFE014bA17989E743c5F6cB21bF9697530B21e', // QuoterV2
-  8453: '0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a'  // Base chain quoter
+  8453: '0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a'  // Base QuoterV2
 };
 
 const QUOTER_ABI = [
   'function quoteExactInputSingle(tuple(address tokenIn, address tokenOut, uint256 amountIn, uint24 fee, uint160 sqrtPriceLimitX96) params) external returns (uint256 amountOut, uint160 sqrtPriceX96After, uint32 initializedTicksCrossed, uint256 gasEstimate)',
   'function quoteExactInput(bytes path, uint256 amountIn) external returns (uint256 amountOut, uint160[] memory sqrtPriceX96AfterList, uint32[] memory initializedTicksCrossedList, uint256 gasEstimate)'
+];
+
+// Update V2 related constants
+const V2_FACTORY_ADDRESS = '0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f';
+const V2_FACTORY_ABI = [
+  'function getPair(address tokenA, address tokenB) external view returns (address pair)'
+];
+
+const V2_PAIR_ABI = [
+  'function getReserves() external view returns (uint112 reserve0, uint112 reserve1, uint32 blockTimestampLast)',
+  'function token0() external view returns (address)',
+  'function token1() external view returns (address)'
 ];
 
 const SwapInterface = () => {
@@ -457,38 +485,12 @@ const SwapInterface = () => {
 
   // Update getQuote function
   const getQuote = async (isReverse = false) => {
-    if (!chain?.id) {
-      toast({
-        title: 'Error',
-        description: 'Please connect your wallet',
-        status: 'error',
-        duration: 3000,
-      });
-      return;
-    }
-
-    if (!fromTokenSymbol || !toTokenSymbol || !address || !signer) return;
+    if (!chain?.id || !fromTokenSymbol || !toTokenSymbol || !address || !signer) return;
     
     const inputToValidate = isReverse ? toAmount : amount;
     if (!inputToValidate) return;
 
-    const numericValue = parseFloat(inputToValidate);
-    if (isNaN(numericValue) || numericValue <= 0) {
-      toast({
-        title: 'Invalid amount',
-        description: 'Please enter a valid number greater than 0',
-        status: 'error',
-        duration: 3000,
-      });
-      return;
-    }
-
     try {
-      const routerAddress = ROUTER_ADDRESSES[chain.id];
-      if (!routerAddress) {
-        throw new Error('Swapping not supported on this chain yet');
-      }
-
       setLoading(true);
 
       const fromTokenAddress = getTokenAddress(chain.id, fromTokenSymbol) || 
@@ -509,118 +511,226 @@ const SwapInterface = () => {
       const actualFromAddress = isNativeToken(chain.id, fromTokenSymbol) 
         ? wrappedToken.address 
         : fromTokenAddress;
+      
       const actualToAddress = isNativeToken(chain.id, toTokenSymbol)
         ? wrappedToken.address
         : toTokenAddress;
 
-      const fromDecimals = await (isNativeToken(chain.id, fromTokenSymbol) 
-        ? Promise.resolve(18) 
-        : new ethers.Contract(actualFromAddress, ERC20_ABI, provider).decimals());
-      
-      const toDecimals = await (isNativeToken(chain.id, toTokenSymbol) 
-        ? Promise.resolve(18) 
-        : new ethers.Contract(actualToAddress, ERC20_ABI, provider).decimals());
+      const fromDecimals = await getTokenDecimals(chain.id, fromTokenSymbol);
+      const toDecimals = await getTokenDecimals(chain.id, toTokenSymbol);
 
-      let amountsAfterFee;
-      let swapAmountWei;
-      let feeAmount;
+      const swapAmountWei = ethers.utils.parseUnits(inputToValidate, fromDecimals);
+      const feeAmount = calculateFee(swapAmountWei);
+      const amountAfterFee = swapAmountWei.sub(feeAmount);
 
-      // Different handling for Base chain
-      if (chain.id === 8453) {
-        const router = new ethers.Contract(routerAddress, ROUTER_ABI, provider);
-        swapAmountWei = ethers.utils.parseUnits(amount, fromDecimals);
-        feeAmount = calculateFee(swapAmountWei);
-        const amountAfterFee = swapAmountWei.sub(feeAmount);
-        const wrappedNative = getWrappedToken(chain.id).address;
+      let bestQuote = null;
+      let bestPath = null;
+      let dexVersion = '';
 
-        amountsAfterFee = await getBaseSwapQuote(
-          router,
-          amountAfterFee,
-          actualFromAddress,
-          actualToAddress,
-          wrappedNative
-        );
-      } else {
-        // Existing code for other chains
-        if (chain.id === 56) {
-          // PancakeSwap V2 style quoting
-          const router = new ethers.Contract(routerAddress, ROUTER_ABI, provider);
-          swapAmountWei = ethers.utils.parseUnits(amount, fromDecimals);
-          feeAmount = calculateFee(swapAmountWei);
-          const amountAfterFee = swapAmountWei.sub(feeAmount);
-          amountsAfterFee = await router.getAmountsOut(amountAfterFee, [actualFromAddress, actualToAddress]);
+      // Add Base to the Universal Router chains
+      if ([1, 137, 42161, 8453].includes(chain.id)) {
+        // Try V2 quote first
+        try {
+          const factory = new ethers.Contract(V2_FACTORY_ADDRESS, V2_FACTORY_ABI, provider);
+          const pairAddress = await factory.getPair(actualFromAddress, actualToAddress);
+          
+          if (pairAddress !== ethers.constants.AddressZero) {
+            const pair = new ethers.Contract(pairAddress, V2_PAIR_ABI, provider);
+            const [reserve0, reserve1] = await pair.getReserves();
+            const token0 = await pair.token0();
+            
+            // Determine which token is token0
+            const [reserveIn, reserveOut] = token0.toLowerCase() === actualFromAddress.toLowerCase() 
+              ? [reserve0, reserve1] 
+              : [reserve1, reserve0];
+
+            // Calculate V2 quote using the constant product formula
+            const amountInWithFee = amountAfterFee.mul(997); // 0.3% fee
+            const numerator = amountInWithFee.mul(reserveOut);
+            const denominator = reserveIn.mul(1000).add(amountInWithFee);
+            const amountOut = numerator.div(denominator);
+
+            bestQuote = amountOut;
+            bestPath = [actualFromAddress, actualToAddress];
+            dexVersion = 'V2';
+            console.log('V2 quote successful:', ethers.utils.formatUnits(bestQuote, toDecimals));
+          }
+        } catch (error) {
+          console.log('V2 quote failed:', error);
+        }
+
+        // Try V3 quote if V2 failed or has worse rate
+        if (!bestQuote || chain.id === 8453) { // Always try V3 for Base chain
+          try {
+            const quoterAddress = QUOTER_ADDRESSES[chain.id];
+            const quoter = new ethers.Contract(quoterAddress, QUOTER_ABI, provider);
+            
+            // Try different fee tiers
+            const feeTiers = [100, 500, 3000, 10000]; // 0.01%, 0.05%, 0.3%, 1%
+            let bestV3Quote = null;
+
+            for (const fee of feeTiers) {
+              try {
+                const params = {
+                  tokenIn: actualFromAddress,
+                  tokenOut: actualToAddress,
+                  amountIn: amountAfterFee,
+                  fee,
+                  sqrtPriceLimitX96: 0
+                };
+
+                const [v3Quote] = await quoter.callStatic.quoteExactInputSingle(params);
+                
+                if (!bestV3Quote || v3Quote.gt(bestV3Quote)) {
+                  bestV3Quote = v3Quote;
+                }
+              } catch (error) {
+                console.log(`V3 quote failed for fee tier ${fee}:`, error);
+                continue;
+              }
+            }
+
+            if (bestV3Quote && (!bestQuote || bestV3Quote.gt(bestQuote))) {
+              bestQuote = bestV3Quote;
+              bestPath = [actualFromAddress, actualToAddress];
+              dexVersion = 'V3';
+              console.log('V3 quote successful:', ethers.utils.formatUnits(bestQuote, toDecimals));
+            }
+          } catch (error) {
+            console.log('V3 quote failed:', error);
+          }
+        }
+
+        if (!bestQuote) {
+          throw new Error('No liquidity found in V2 or V3 pools');
+        }
+
+        const quoteData = {
+          fromTokenAmount: swapAmountWei.toString(),
+          toTokenAmount: bestQuote.toString(),
+          fromToken: {
+            address: actualFromAddress,
+            symbol: fromTokenSymbol,
+          },
+          toToken: {
+            address: actualToAddress,
+            symbol: toTokenSymbol,
+          },
+          router: ROUTER_ADDRESSES[chain.id],
+          dexName: `Uniswap ${dexVersion}`,
+          path: bestPath,
+          deadline: Math.floor(Date.now() / 1000) + 20 * 60,
+          feeAmount: feeAmount.toString(),
+          dexVersion,
+          options: {
+            gasLimit: ethers.BigNumber.from(300000),
+            gasPrice: await provider.getGasPrice()
+          }
+        };
+
+        // Update state based on quote type
+        if (isReverse) {
+          setReverseQuote(quoteData);
+          setIsReverseQuote(true);
+          setAmount(ethers.utils.formatUnits(swapAmountWei, fromDecimals));
         } else {
-          // Uniswap V3 style quoting
-          const quoterAddress = QUOTER_ADDRESSES[chain.id];
-          const quoter = new ethers.Contract(quoterAddress, QUOTER_ABI, provider);
-          const poolFee = 3000; // 0.3% pool fee
+          setQuote(quoteData);
+          setIsReverseQuote(false);
+          setToAmount(ethers.utils.formatUnits(bestQuote, toDecimals));
+        }
 
-          swapAmountWei = ethers.utils.parseUnits(amount, fromDecimals);
-          feeAmount = calculateFee(swapAmountWei);
+        // Show success toast
+        toast({
+          title: 'Quote received',
+          description: `Best price found on Uniswap ${dexVersion}`,
+          status: 'success',
+          duration: 3000,
+        });
+      } else if (chain.id === 56) {  // BNB Chain (BSC)
+        try {
+          const router = new ethers.Contract(ROUTER_ADDRESSES[chain.id], ROUTER_ABI, provider);
+          const swapAmountWei = ethers.utils.parseUnits(amount, fromDecimals);
+          const feeAmount = calculateFee(swapAmountWei);
           const amountAfterFee = swapAmountWei.sub(feeAmount);
+          const WBNB = '0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c';
+          let amounts;
+          let path;
 
-          const params = {
-            tokenIn: actualFromAddress,
-            tokenOut: actualToAddress,
-            amountIn: amountAfterFee,
-            fee: poolFee,
-            sqrtPriceLimitX96: 0
+          // Try direct path first
+          try {
+            amounts = await router.getAmountsOut(amountAfterFee, [actualFromAddress, actualToAddress]);
+            path = [actualFromAddress, actualToAddress];
+          } catch (error) {
+            console.log('Direct path failed, trying through WBNB');
+            
+            // Try routing through WBNB
+            if (actualFromAddress !== WBNB && actualToAddress !== WBNB) {
+              amounts = await router.getAmountsOut(amountAfterFee, [
+                actualFromAddress,
+                WBNB,
+                actualToAddress
+              ]);
+              path = [actualFromAddress, WBNB, actualToAddress];
+            } else {
+              throw new Error('No valid path found');
+            }
+          }
+
+          const estimatedOutputAmount = ethers.utils.formatUnits(amounts[amounts.length - 1], toDecimals);
+
+          if (amounts[amounts.length - 1].isZero() || parseFloat(estimatedOutputAmount) === 0) {
+            throw new Error('Output amount is zero. This pair might not have enough liquidity.');
+          }
+
+          const quoteData = {
+            fromTokenAmount: swapAmountWei.toString(),
+            toTokenAmount: amounts[amounts.length - 1].toString(),
+            fromToken: {
+              address: actualFromAddress,
+              symbol: fromTokenSymbol,
+            },
+            toToken: {
+              address: actualToAddress,
+              symbol: toTokenSymbol,
+            },
+            router: ROUTER_ADDRESSES[chain.id],
+            dexName: DEX_NAMES[chain.id],
+            path: path,
+            deadline: Math.floor(Date.now() / 1000) + 20 * 60,
+            feeAmount: feeAmount.toString(),
+            options: {
+              gasLimit: ethers.BigNumber.from(300000),
+              gasPrice: await provider.getGasPrice()
+            }
           };
 
-          const [quoteAmount] = await quoter.callStatic.quoteExactInputSingle(params);
-          amountsAfterFee = [amountAfterFee, quoteAmount];
+          if (isReverse) {
+            setReverseQuote(quoteData);
+            setIsReverseQuote(true);
+            setAmount(ethers.utils.formatUnits(swapAmountWei, fromDecimals));
+          } else {
+            setQuote(quoteData);
+            setIsReverseQuote(false);
+            setToAmount(estimatedOutputAmount);
+          }
+
+          toast({
+            title: 'Quote received',
+            description: isReverse 
+              ? `Required input: ${ethers.utils.formatUnits(swapAmountWei, fromDecimals)} ${fromTokenSymbol}`
+              : `Expected output: ${estimatedOutputAmount} ${toTokenSymbol}`,
+            status: 'success',
+            duration: 3000,
+            isClosable: true,
+          });
+        } catch (error) {
+          console.error('Error getting quote:', error);
+          throw error;
         }
-      }
-
-      const estimatedOutputAmount = ethers.utils.formatUnits(amountsAfterFee[amountsAfterFee.length - 1], toDecimals);
-
-      if (amountsAfterFee[amountsAfterFee.length - 1].isZero() || parseFloat(estimatedOutputAmount) === 0) {
-        throw new Error('Output amount is zero. This pair might not have enough liquidity.');
-      }
-
-      const quoteData = {
-        fromTokenAmount: swapAmountWei.toString(),
-        toTokenAmount: amountsAfterFee[amountsAfterFee.length - 1].toString(),
-        fromToken: {
-          address: actualFromAddress,
-          symbol: fromTokenSymbol,
-        },
-        toToken: {
-          address: actualToAddress,
-          symbol: toTokenSymbol,
-        },
-        router: routerAddress,
-        dexName: DEX_NAMES[chain.id],
-        path: amountsAfterFee.length === 3 ? 
-          [actualFromAddress, amountsAfterFee[1].address, actualToAddress] :
-          [actualFromAddress, actualToAddress],
-        deadline: Math.floor(Date.now() / 1000) + 20 * 60,
-        feeAmount: feeAmount.toString(),
-        options: {
-          gasLimit: ethers.BigNumber.from(chain.id === 8453 ? 500000 : 300000),
-          gasPrice: await provider.getGasPrice()
-        }
-      };
-
-      if (isReverse) {
-        setReverseQuote(quoteData);
-        setIsReverseQuote(true);
-        setAmount(ethers.utils.formatUnits(swapAmountWei, fromDecimals));
       } else {
-        setQuote(quoteData);
-        setIsReverseQuote(false);
-        setToAmount(estimatedOutputAmount);
+        // Handle other chains (BSC)
+        // ... existing code for other chains ...
       }
-
-      toast({
-        title: 'Quote received',
-        description: isReverse 
-          ? `Required input: ${ethers.utils.formatUnits(swapAmountWei, fromDecimals)} ${fromTokenSymbol}`
-          : `Expected output: ${estimatedOutputAmount} ${toTokenSymbol}`,
-        status: 'success',
-        duration: 3000,
-        isClosable: true,
-      });
     } catch (error) {
       console.error('Error getting quote:', error);
       toast({
@@ -640,7 +750,7 @@ const SwapInterface = () => {
     }
   };
 
-  // Update handleSwap function to handle Uniswap V3 swaps
+  // Update handleSwap function to handle Universal Router
   const handleSwap = async () => {
     if (!chain?.id) {
       toast({
@@ -862,8 +972,8 @@ const SwapInterface = () => {
       };
 
       let tx;
-      if (chain.id === 56 || chain.id === 8453) {
-        // PancakeSwap V2 and Base V2 style swaps
+      if (chain.id === 56) {  // BNB Chain (BSC)
+        // PancakeSwap V2 style swaps
         const wrappedInfo = getWrappedToken(chain.id);
         if (!wrappedInfo) {
           throw new Error('Wrapped token not found for this chain');
@@ -885,7 +995,7 @@ const SwapInterface = () => {
             address,
             deadline,
             {
-              gasLimit: formatBigNumber(chain.id === 8453 ? 500000 : 300000),
+              gasLimit: formatBigNumber(300000),
               value: formatBigNumber(amountAfterFee)
             }
           );
@@ -898,7 +1008,7 @@ const SwapInterface = () => {
             address,
             deadline,
             {
-              gasLimit: formatBigNumber(chain.id === 8453 ? 500000 : 300000)
+              gasLimit: formatBigNumber(300000)
             }
           );
         } else {
@@ -906,11 +1016,11 @@ const SwapInterface = () => {
           tx = await router.swapExactTokensForTokens(
             formatBigNumber(amountAfterFee),
             formatBigNumber(amountOutMin),
-            [activeQuote.fromToken.address, activeQuote.toToken.address],
+            activeQuote.path,
             address,
             deadline,
             {
-              gasLimit: formatBigNumber(chain.id === 8453 ? 500000 : 300000)
+              gasLimit: formatBigNumber(300000)
             }
           );
         }
@@ -2218,52 +2328,6 @@ const SwapInterface = () => {
         </ModalContent>
       </Modal>
     );
-  };
-
-  // Update Base chain quote handling
-  const getBaseSwapQuote = async (router, amountAfterFee, actualFromAddress, actualToAddress, wrappedNative) => {
-    try {
-      // Try direct path first
-      try {
-        const amountsOut = await router.getAmountsOut(amountAfterFee, [actualFromAddress, actualToAddress]);
-        return amountsOut;
-      } catch (error) {
-        console.log('Direct path failed, trying through WETH');
-      }
-
-      // Try through WETH
-      if (actualFromAddress !== wrappedNative && actualToAddress !== wrappedNative) {
-        try {
-          const amountsOut = await router.getAmountsOut(amountAfterFee, [
-            actualFromAddress,
-            wrappedNative,
-            actualToAddress
-          ]);
-          return amountsOut;
-        } catch (error) {
-          console.log('WETH path failed, trying through USDbC');
-        }
-      }
-
-      // Try through USDbC as last resort
-      const usdbc = '0xd9aAEc86B65D86f6A7B5B1b0c42FFA531710b6CA';
-      if (actualFromAddress !== usdbc && actualToAddress !== usdbc) {
-        try {
-          const amountsOut = await router.getAmountsOut(amountAfterFee, [
-            actualFromAddress,
-            usdbc,
-            actualToAddress
-          ]);
-          return amountsOut;
-        } catch (error) {
-          console.log('USDbC path failed');
-        }
-      }
-
-      throw new Error('No valid swap path found');
-    } catch (error) {
-      throw new Error('No liquidity available for this pair. Try a different amount or pair.');
-    }
   };
 
   return (
