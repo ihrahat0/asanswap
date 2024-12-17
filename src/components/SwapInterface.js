@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import {
   Box,
   Button,
@@ -198,6 +199,10 @@ const PANCAKE_V3_QUOTER_ABI = [
 ];
 
 const SwapInterface = () => {
+  // Add these hooks near the top of your component
+  const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
+
   const { address } = useAccount();
   const { chain } = useNetwork();
   const { switchNetwork, isLoading: isSwitchingChain } = useSwitchNetwork();
@@ -265,6 +270,7 @@ const SwapInterface = () => {
     const toToken = toTokenSymbol;
     setFromTokenSymbol(toToken);
     setToTokenSymbol(fromToken);
+    updateUrlWithTokens(toToken, fromToken);
     setQuote(null);
   };
 
@@ -1003,6 +1009,50 @@ const SwapInterface = () => {
     }
   }, [customTokens]);
 
+  // Add this function to update URL when tokens change
+  const updateUrlWithTokens = useCallback((fromSymbol, toSymbol) => {
+    const params = new URLSearchParams(searchParams);
+    
+    if (fromSymbol) {
+      const fromAddress = getTokenAddress(chain?.id, fromSymbol) || 
+        customTokens[chain?.id]?.[fromSymbol]?.address;
+      if (fromAddress) {
+        params.set('from', fromAddress);
+      } else {
+        params.delete('from');
+      }
+    }
+    
+    if (toSymbol) {
+      const toAddress = getTokenAddress(chain?.id, toSymbol) || 
+        customTokens[chain?.id]?.[toSymbol]?.address;
+      if (toAddress) {
+        params.set('to', toAddress);
+      } else {
+        params.delete('to');
+      }
+    }
+    
+    setSearchParams(params);
+  }, [chain?.id, customTokens, searchParams, setSearchParams]);
+
+  // Add function to get token symbol from address
+  const getTokenSymbolFromAddress = useCallback((address) => {
+    if (!chain?.id || !address) return null;
+    
+    // Check custom tokens first
+    const customToken = Object.entries(customTokens[chain.id] || {})
+      .find(([_, token]) => token.address.toLowerCase() === address.toLowerCase());
+    if (customToken) return customToken[0];
+
+    // Check predefined tokens
+    const token = Object.entries(TOKEN_INFO[chain.id] || {})
+      .find(([_, info]) => info.address.toLowerCase() === address.toLowerCase());
+    if (token) return token[0];
+
+    return null;
+  }, [chain?.id, customTokens]);
+
   // Update the TokenSelect component
   const TokenSelect = ({ value, onChange, tokens, label, isDisabled }) => {
     const getTokenInfo = useCallback((symbol) => {
@@ -1280,6 +1330,16 @@ const SwapInterface = () => {
       }
     }, [isOpen]);
 
+    const handleTokenSelect = (symbol) => {
+      onChange(symbol);
+      if (label === "From") {
+        updateUrlWithTokens(symbol, toTokenSymbol);
+      } else {
+        updateUrlWithTokens(fromTokenSymbol, symbol);
+      }
+      onClose();
+    };
+
     return (
       <Box className="token-section">
         <Text color="white" mb={2}>{label}</Text>
@@ -1450,7 +1510,7 @@ const SwapInterface = () => {
                         <Button
                           key={symbol}
                           onClick={() => {
-                            onChange(symbol);
+                            handleTokenSelect(symbol);
                             onClose();
                           }}
                           className="token-list-button"
@@ -1489,7 +1549,7 @@ const SwapInterface = () => {
                           <Button
                             key={symbol}
                             onClick={() => {
-                              onChange(symbol);
+                              handleTokenSelect(symbol);
                               onClose();
                             }}
                             className="token-list-button"
@@ -2288,6 +2348,114 @@ const SwapInterface = () => {
       throw new Error('No liquidity available for this pair. Try a different amount or pair.');
     }
   };
+
+  // Update the URL parameters effect to handle token imports
+  useEffect(() => {
+    async function handleUrlParameters() {
+      if (!chain?.id || !provider) return;
+
+      const fromAddress = searchParams.get('from');
+      const toAddress = searchParams.get('to');
+
+      const importTokenWithLogo = async (address) => {
+        try {
+          // First try to get token info from DexScreener
+          const response = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${address}`);
+          const data = await response.json();
+
+          if (data.pairs && data.pairs.length > 0) {
+            const tokenData = data.pairs[0];
+            const tokenInfo = tokenData.baseToken.address.toLowerCase() === address.toLowerCase() 
+              ? tokenData.baseToken 
+              : tokenData.quoteToken;
+
+            // Get token contract details
+            const tokenContract = new ethers.Contract(address, ERC20_ABI, provider);
+            const [name, decimals] = await Promise.all([
+              tokenContract.name(),
+              tokenContract.decimals(),
+            ]);
+
+            // Add to custom tokens with logo
+            const newTokenInfo = {
+              address,
+              name,
+              symbol: tokenInfo.symbol,
+              decimals: decimals.toString(),
+              logo: tokenData.info?.imageUrl || null
+            };
+
+            setCustomTokens(prev => ({
+              ...prev,
+              [chain.id]: {
+                ...(prev[chain.id] || {}),
+                [tokenInfo.symbol]: newTokenInfo
+              }
+            }));
+
+            return tokenInfo.symbol;
+          } else {
+            // Fallback to basic import if DexScreener doesn't have the token
+            const tokenContract = new ethers.Contract(address, ERC20_ABI, provider);
+            const [name, symbol, decimals] = await Promise.all([
+              tokenContract.name(),
+              tokenContract.symbol(),
+              tokenContract.decimals(),
+            ]);
+
+            const newTokenInfo = {
+              address,
+              name,
+              symbol,
+              decimals: decimals.toString(),
+              logo: null
+            };
+
+            setCustomTokens(prev => ({
+              ...prev,
+              [chain.id]: {
+                ...(prev[chain.id] || {}),
+                [symbol]: newTokenInfo
+              }
+            }));
+
+            return symbol;
+          }
+        } catch (error) {
+          console.error('Error importing token:', error);
+          return null;
+        }
+      };
+
+      if (fromAddress) {
+        const symbol = getTokenSymbolFromAddress(fromAddress);
+        if (symbol) {
+          setFromTokenSymbol(symbol);
+        } else {
+          // Try to import the token if not found
+          const importedSymbol = await importTokenWithLogo(fromAddress);
+          if (importedSymbol) {
+            setFromTokenSymbol(importedSymbol);
+          }
+        }
+      }
+
+      if (toAddress) {
+        const symbol = getTokenSymbolFromAddress(toAddress);
+        if (symbol) {
+          setToTokenSymbol(symbol);
+        } else {
+          // Try to import the token if not found
+          const importedSymbol = await importTokenWithLogo(toAddress);
+          if (importedSymbol) {
+            setToTokenSymbol(importedSymbol);
+          }
+        }
+      }
+    }
+
+    handleUrlParameters();
+  }, [chain?.id, searchParams, provider, getTokenSymbolFromAddress]);
 
   return (
     <Box className="min-h-screen relative">
