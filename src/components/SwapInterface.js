@@ -838,7 +838,7 @@ const SwapInterface = () => {
       // Ensure proper checksum addresses
       const fromTokenAddress = ethers.utils.getAddress(activeQuote.fromToken.address);
       const toTokenAddress = ethers.utils.getAddress(activeQuote.toToken.address);
-      const routerAddress = ethers.utils.getAddress(network.v2Router);
+      const routerAddress = chain.id === 8453 ? network.v3Router : ethers.utils.getAddress(network.v2Router);
       const wethAddress = ethers.utils.getAddress(network.weth);
 
       const amountIn = ethers.BigNumber.from(activeQuote.fromTokenAmount);
@@ -878,7 +878,48 @@ const SwapInterface = () => {
       showToast('Fee Transaction Confirmed', 'View transaction details', 'success', feeTx.hash);
 
       let tx;
-      if (chain.id === 56) {
+      if (chain.id === 8453) {
+        // Base chain V3 swap
+        const router = new ethers.Contract(
+          network.v3Router,
+          network.v3RouterAbi,
+          signer
+        );
+
+        // First approve if needed
+        if (!isNativeToken(chain.id, activeQuote.fromToken.symbol)) {
+          const tokenContract = new ethers.Contract(fromTokenAddress, ERC20_ABI, signer);
+          const allowance = await tokenContract.allowance(address, network.v3Router);
+          if (allowance.lt(amountIn)) {
+            const approveTx = await tokenContract.approve(network.v3Router, amountIn);
+            await approveTx.wait();
+          }
+        }
+
+        const path = ethers.utils.solidityPack(
+          ['address', 'uint24', 'address'],
+          [fromTokenAddress, 10000, toTokenAddress]
+        );
+
+        const params = {
+          path,
+          recipient: address,
+          amountIn: amountIn.toString(),
+          amountOutMinimum: amountOutMin.toString()
+        };
+
+        const feeData = await provider.getFeeData();
+        tx = await router.exactInput(
+          params,
+          {
+            value: isNativeToken(chain.id, activeQuote.fromToken.symbol) ? amountIn : 0,
+            gasLimit: 500000,
+            maxFeePerGas: feeData.maxFeePerGas,
+            maxPriorityFeePerGas: feeData.maxPriorityFeePerGas,
+            type: 2
+          }
+        );
+      } else if (chain.id === 56) {
         // BSC V2 swap
         const router = new ethers.Contract(routerAddress, network.v2RouterAbi, signer);
         
@@ -930,8 +971,56 @@ const SwapInterface = () => {
           );
         }
       } else {
-        // Handle other chains (Base and Ethereum) as before
-        // ... existing code for other chains ...
+        // Ethereum V2 swap
+        const router = new ethers.Contract(routerAddress, network.v2RouterAbi, signer);
+        
+        if (isNativeToken(chain.id, activeQuote.fromToken.symbol)) {
+          // ETH -> Token
+          tx = await router.swapExactETHForTokens(
+            amountOutMin,
+            [wethAddress, toTokenAddress],
+            address,
+            deadline,
+            {
+              value: amountIn,
+              gasLimit: 500000
+            }
+          );
+        } else if (isNativeToken(chain.id, activeQuote.toToken.symbol)) {
+          // Token -> ETH
+          const tokenContract = new ethers.Contract(fromTokenAddress, ERC20_ABI, signer);
+          const allowance = await tokenContract.allowance(address, routerAddress);
+          if (allowance.lt(amountIn)) {
+            const approveTx = await tokenContract.approve(routerAddress, amountIn);
+            await approveTx.wait();
+          }
+
+          tx = await router.swapExactTokensForETH(
+            amountIn,
+            amountOutMin,
+            [fromTokenAddress, wethAddress],
+            address,
+            deadline,
+            { gasLimit: 500000 }
+          );
+        } else {
+          // Token -> Token
+          const tokenContract = new ethers.Contract(fromTokenAddress, ERC20_ABI, signer);
+          const allowance = await tokenContract.allowance(address, routerAddress);
+          if (allowance.lt(amountIn)) {
+            const approveTx = await tokenContract.approve(routerAddress, amountIn);
+            await approveTx.wait();
+          }
+
+          tx = await router.swapExactTokensForTokens(
+            amountIn,
+            amountOutMin,
+            [fromTokenAddress, toTokenAddress],
+            address,
+            deadline,
+            { gasLimit: 500000 }
+          );
+        }
       }
 
       showToast('Transaction Pending', 'View transaction details', 'info', tx.hash);
@@ -996,29 +1085,154 @@ const SwapInterface = () => {
     setSearchParams(params);
   }, [chain?.id, customTokens, searchParams, setSearchParams]);
 
-  // Add function to get token symbol from address
-  const getTokenSymbolFromAddress = useCallback((address) => {
-    if (!chain?.id || !address) return null;
+  // Update getTokenSymbolFromAddress function to work without wallet connection
+  const getTokenSymbolFromAddress = useCallback((address, chainId = null) => {
+    // Use provided chainId or current chain's id
+    const effectiveChainId = chainId || chain?.id;
+    if (!address) return null;
     
     // Check custom tokens first
-    const customToken = Object.entries(customTokens[chain.id] || {})
+    const customToken = Object.entries(customTokens[effectiveChainId] || {})
       .find(([_, token]) => token.address.toLowerCase() === address.toLowerCase());
     if (customToken) return customToken[0];
 
     // Check predefined tokens
-    const token = Object.entries(TOKEN_INFO[chain.id] || {})
+    const token = Object.entries(TOKEN_INFO[effectiveChainId] || {})
       .find(([_, info]) => info.address.toLowerCase() === address.toLowerCase());
     if (token) return token[0];
 
     return null;
   }, [chain?.id, customTokens]);
 
+  // Update handleUrlParameters to pass chainId to getTokenSymbolFromAddress
+  useEffect(() => {
+    async function handleUrlParameters() {
+      const fromAddress = searchParams.get('from');
+      const toAddress = searchParams.get('to');
+
+      if (!fromAddress && !toAddress) return;
+
+      const detectTokenChain = async (address) => {
+        const providers = {
+          1: new ethers.providers.JsonRpcProvider('https://eth.llamarpc.com'),
+          56: new ethers.providers.JsonRpcProvider('https://bsc-dataseed.binance.org'),
+          8453: new ethers.providers.JsonRpcProvider('https://mainnet.base.org')
+        };
+
+        for (const [chainId, provider] of Object.entries(providers)) {
+          try {
+            const tokenContract = new ethers.Contract(address, ERC20_ABI, provider);
+            await tokenContract.symbol();
+            return parseInt(chainId);
+          } catch (error) {
+            continue;
+          }
+        }
+        return null;
+      };
+
+      // Detect chain from tokens
+      let detectedChainId = null;
+      if (fromAddress) {
+        detectedChainId = await detectTokenChain(fromAddress);
+      }
+      if (!detectedChainId && toAddress) {
+        detectedChainId = await detectTokenChain(toAddress);
+      }
+
+      // If chain detected and different from current chain, switch chain
+      if (detectedChainId && (!chain?.id || chain.id !== detectedChainId)) {
+        if (switchNetwork) {
+          try {
+            await switchNetwork(detectedChainId);
+          } catch (error) {
+            console.error('Error switching chain:', error);
+          }
+        }
+      }
+
+      const importTokenWithLogo = async (address, detectedChainId) => {
+        try {
+          // First try to get token info from DexScreener
+          const response = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${address}`);
+          const data = await response.json();
+
+          if (data.pairs && data.pairs.length > 0) {
+            const tokenData = data.pairs[0];
+            const tokenInfo = tokenData.baseToken.address.toLowerCase() === address.toLowerCase() 
+              ? tokenData.baseToken 
+              : tokenData.quoteToken;
+
+            // Get token contract details using the correct chain's provider
+            const provider = new ethers.providers.JsonRpcProvider(getChainRpcUrl(detectedChainId));
+            const tokenContract = new ethers.Contract(address, ERC20_ABI, provider);
+            const [name, decimals] = await Promise.all([
+              tokenContract.name(),
+              tokenContract.decimals(),
+            ]);
+
+            // Add to custom tokens with logo
+            const newTokenInfo = {
+              address,
+              name,
+              symbol: tokenInfo.symbol,
+              decimals: decimals.toString(),
+              logo: tokenData.info?.imageUrl || null
+            };
+
+            setCustomTokens(prev => ({
+              ...prev,
+              [detectedChainId]: {
+                ...(prev[detectedChainId] || {}),
+                [tokenInfo.symbol]: newTokenInfo
+              }
+            }));
+
+            return tokenInfo.symbol;
+          }
+        } catch (error) {
+          console.error('Error importing token:', error);
+        }
+        return null;
+      };
+
+      // Import tokens and set symbols
+      if (fromAddress) {
+        const symbol = getTokenSymbolFromAddress(fromAddress, detectedChainId);
+        if (symbol) {
+          setFromTokenSymbol(symbol);
+        } else {
+          const importedSymbol = await importTokenWithLogo(fromAddress, detectedChainId);
+          if (importedSymbol) {
+            setFromTokenSymbol(importedSymbol);
+          }
+        }
+      }
+
+      if (toAddress) {
+        const symbol = getTokenSymbolFromAddress(toAddress, detectedChainId);
+        if (symbol) {
+          setToTokenSymbol(symbol);
+        } else {
+          const importedSymbol = await importTokenWithLogo(toAddress, detectedChainId);
+          if (importedSymbol) {
+            setToTokenSymbol(importedSymbol);
+          }
+        }
+      }
+    }
+
+    handleUrlParameters();
+  }, [searchParams, chain?.id, switchNetwork, getTokenSymbolFromAddress]);
+
   // Update the TokenSelect component
   const TokenSelect = ({ value, onChange, tokens, label, isDisabled }) => {
-    const getTokenInfo = useCallback((symbol) => {
-      if (!chain || !symbol) return null;
-      return TOKEN_INFO[chain.id]?.[symbol] || customTokens[chain.id]?.[symbol];
-    }, [chain, customTokens]);
+    const getTokenInfo = useCallback((symbol, chainId = null) => {
+      // Use detected chain ID or current chain ID
+      const effectiveChainId = chainId || chain?.id;
+      if (!symbol) return null;
+      return TOKEN_INFO[effectiveChainId]?.[symbol] || customTokens[effectiveChainId]?.[symbol];
+    }, [chain?.id, customTokens]);
 
     const { isOpen, onOpen, onClose } = useDisclosure();
     const [searchQuery, setSearchQuery] = useState('');
@@ -1028,6 +1242,39 @@ const SwapInterface = () => {
     const inputRef = useRef(null);
     
     const inputAmount = label === "From" ? amount : toAmount;
+
+    // Get detected chain ID from URL parameters
+    const getDetectedChainId = useCallback(() => {
+      const fromAddress = searchParams.get('from');
+      const toAddress = searchParams.get('to');
+      if (!fromAddress && !toAddress) return null;
+
+      // Check if we have the token in our custom tokens
+      for (const [chainId, tokens] of Object.entries(customTokens)) {
+        for (const token of Object.values(tokens)) {
+          if (token.address.toLowerCase() === fromAddress?.toLowerCase() || 
+              token.address.toLowerCase() === toAddress?.toLowerCase()) {
+            return parseInt(chainId);
+          }
+        }
+      }
+
+      // Check predefined tokens
+      for (const [chainId, tokens] of Object.entries(TOKEN_INFO)) {
+        for (const token of Object.values(tokens)) {
+          if (token.address.toLowerCase() === fromAddress?.toLowerCase() || 
+              token.address.toLowerCase() === toAddress?.toLowerCase()) {
+            return parseInt(chainId);
+          }
+        }
+      }
+
+      return chain?.id || null;
+    }, [searchParams, chain?.id, customTokens]);
+
+    // Get token info with detected chain ID
+    const effectiveChainId = getDetectedChainId();
+    const tokenInfo = value ? getTokenInfo(value, effectiveChainId) : null;
 
     // Handle amount change
     const handleAmountChange = (e) => {
@@ -1310,19 +1557,19 @@ const SwapInterface = () => {
             value={inputAmount || ''}
             onChange={handleAmountChange}
             className="token-amount-input"
-            isDisabled={isDisabled}
+            isDisabled={!value} // Only disable if no token selected
             autoComplete="off"
             autoFocus={label === "From"}
           />
           <Button
             onClick={onOpen}
-            isDisabled={isDisabled}
+            isDisabled={false} // Never disable token selection
             className="token-select-button"
           >
             {value ? (
               <HStack spacing={2}>
                 <Image
-                  src={getTokenInfo(value)?.logo || 'default-token-logo.png'}
+                  src={tokenInfo?.logo || 'default-token-logo.png'}
                   alt={value}
                   width="24px"
                   height="24px"
@@ -1371,173 +1618,41 @@ const SwapInterface = () => {
                 <Center py={4}>
                   <Spinner color="white" />
                 </Center>
-              ) : foundTokenInfo ? (
-                <VStack spacing={4} align="stretch">
-                  <Box 
-                    p={4} 
-                    borderRadius="md" 
-                    background="rgba(255, 255, 255, 0.1)"
-                    borderColor="rgba(139, 0, 0, 0.3)"
-                    borderWidth={1}
-                  >
-                    <HStack justify="space-between" align="center">
-                      <HStack spacing={3}>
-                        {foundTokenInfo.logo ? (
-                          <Image
-                            src={foundTokenInfo.logo}
-                            alt={foundTokenInfo.symbol}
-                            width="32px"
-                            height="32px"
-                            borderRadius="full"
-                          />
-                        ) : (
-                          <Box
-                            width="32px"
-                            height="32px"
-                            borderRadius="full"
-                            bg="gray.400"
-                          />
-                        )}
-                        <VStack align="flex-start" spacing={0}>
-                          <Text color="white" fontWeight="bold">
-                            {foundTokenInfo.name}
-                          </Text>
-                          <Text color="gray.300">
-                            {foundTokenInfo.symbol}
-                          </Text>
-                        </VStack>
-                      </HStack>
-                      {foundTokenInfo.priceUsd && (
-                        <Text color="green.400" fontWeight="bold" fontSize="lg">
-                          ${parseFloat(foundTokenInfo.priceUsd).toFixed(6)}
-                        </Text>
-                      )}
-                    </HStack>
-
-                    {/* Social Links */}
-                    {(foundTokenInfo.twitter || foundTokenInfo.telegram) && (
-                      <VStack align="stretch" mt={3} spacing={2}>
-                        {foundTokenInfo.twitter && (
-                          <Link 
-                            href={foundTokenInfo.twitter} 
-                            isExternal
-                            color="twitter.400"
-                            fontSize="sm"
-                          >
-                            <HStack>
-                              <Icon as={FaTwitter} />
-                              <Text>Twitter</Text>
-                            </HStack>
-                          </Link>
-                        )}
-                        {foundTokenInfo.telegram && (
-                          <Link 
-                            href={foundTokenInfo.telegram} 
-                            isExternal
-                            color="telegram.400"
-                            fontSize="sm"
-                          >
-                            <HStack>
-                              <Icon as={FaTelegram} />
-                              <Text>Telegram</Text>
-                            </HStack>
-                          </Link>
-                        )}
-                      </VStack>
-                    )}
-                  </Box>
-
-                  {foundTokenInfo.chainId !== chain?.id && (
-                    <Text color="orange.300" fontSize="sm">
-                      This token is on {foundTokenInfo.chainName}. Network will be switched automatically.
-                    </Text>
-                  )}
-
-                  <Button
-                    colorScheme="orange"
-                    onClick={handleImport}
-                    leftIcon={<Icon as={FaPlus} />}
-                  >
-                    Import Token
-                  </Button>
-                </VStack>
               ) : (
                 <VStack align="stretch" spacing={2} maxH="60vh" overflowY="auto">
-                  {searchResults.length > 0 ? (
-                    searchResults.map((symbol) => {
-                      const tokenInfo = getTokenInfo(symbol);
-                      return (
-                        <Button
-                          key={symbol}
-                          onClick={() => {
-                            handleTokenSelect(symbol);
-                            onClose();
-                          }}
-                          className="token-list-button"
-                          justifyContent="flex-start"
-                          width="100%"
-                        >
-                          <HStack spacing={3}>
-                            <Image
-                              src={tokenInfo?.logo || 'default-token-logo.png'}
-                              alt={symbol}
-                              width="32px"
-                              height="32px"
-                              borderRadius="full"
-                            />
-                            <VStack align="flex-start" spacing={0}>
-                              <Text color="white">
-                                {tokenInfo?.name || symbol}
-                              </Text>
-                              <Text fontSize="sm" color="gray.400">
-                                {symbol}
-                              </Text>
-                            </VStack>
-                          </HStack>
-                        </Button>
-                      );
-                    })
-                  ) : searchQuery ? (
-                    <VStack py={4}>
-                      <Text color="gray.400">No results found</Text>
-                    </VStack>
-                  ) : (
-                    <VStack align="stretch" spacing={2}>
-                      {tokens.map((symbol) => {
-                        const tokenInfo = getTokenInfo(symbol);
-                        return (
-                          <Button
-                            key={symbol}
-                            onClick={() => {
-                              handleTokenSelect(symbol);
-                              onClose();
-                            }}
-                            className="token-list-button"
-                            justifyContent="flex-start"
-                            width="100%"
-                          >
-                            <HStack spacing={3}>
-                              <Image
-                                src={tokenInfo?.logo || 'default-token-logo.png'}
-                                alt={symbol}
-                                width="32px"
-                                height="32px"
-                                borderRadius="full"
-                              />
-                              <VStack align="flex-start" spacing={0}>
-                                <Text color="white">
-                                  {tokenInfo?.name || symbol}
-                                </Text>
-                                <Text fontSize="sm" color="gray.400">
-                                  {symbol}
-                                </Text>
-                              </VStack>
-                            </HStack>
-                          </Button>
-                        );
-                      })}
-                    </VStack>
-                  )}
+                  {tokens.map((symbol) => {
+                    const tokenInfo = getTokenInfo(symbol, effectiveChainId);
+                    return (
+                      <Button
+                        key={symbol}
+                        onClick={() => {
+                          handleTokenSelect(symbol);
+                          onClose();
+                        }}
+                        className="token-list-button"
+                        justifyContent="flex-start"
+                        width="100%"
+                      >
+                        <HStack spacing={3}>
+                          <Image
+                            src={tokenInfo?.logo || 'default-token-logo.png'}
+                            alt={symbol}
+                            width="32px"
+                            height="32px"
+                            borderRadius="full"
+                          />
+                          <VStack align="flex-start" spacing={0}>
+                            <Text color="white">
+                              {tokenInfo?.name || symbol}
+                            </Text>
+                            <Text fontSize="sm" color="gray.400">
+                              {symbol}
+                            </Text>
+                          </VStack>
+                        </HStack>
+                      </Button>
+                    );
+                  })}
                 </VStack>
               )}
             </ModalBody>
@@ -1558,10 +1673,10 @@ const SwapInterface = () => {
               size="sm"
               onClick={() => handlePercentageClick(50)}
               className="percentage-button"
-              isDisabled={label === "From" ? 
+              isDisabled={!address || (label === "From" ? 
                 (!fromTokenBalance || parseFloat(fromTokenBalance) <= 0) :
                 (!toTokenBalance || parseFloat(toTokenBalance) <= 0)
-              }
+              )}
             >
               50%
             </Button>
@@ -1569,10 +1684,10 @@ const SwapInterface = () => {
               size="sm"
               onClick={() => handlePercentageClick(100)}
               className="percentage-button"
-              isDisabled={label === "From" ? 
+              isDisabled={!address || (label === "From" ? 
                 (!fromTokenBalance || parseFloat(fromTokenBalance) <= 0) :
                 (!toTokenBalance || parseFloat(toTokenBalance) <= 0)
-              }
+              )}
             >
               Max
             </Button>
@@ -2309,15 +2424,34 @@ const SwapInterface = () => {
     }
   };
 
-  // Update the URL parameters effect to handle token imports
+  // Update the URL parameters effect to handle token imports without wallet connection
   useEffect(() => {
     async function handleUrlParameters() {
-      if (!chain?.id || !provider) return;
-
       const fromAddress = searchParams.get('from');
       const toAddress = searchParams.get('to');
 
-      const importTokenWithLogo = async (address) => {
+      if (!fromAddress && !toAddress) return;
+
+      const detectTokenChain = async (address) => {
+        const providers = {
+          1: new ethers.providers.JsonRpcProvider('https://eth.llamarpc.com'),
+          56: new ethers.providers.JsonRpcProvider('https://bsc-dataseed.binance.org'),
+          8453: new ethers.providers.JsonRpcProvider('https://mainnet.base.org')
+        };
+
+        for (const [chainId, provider] of Object.entries(providers)) {
+          try {
+            const tokenContract = new ethers.Contract(address, ERC20_ABI, provider);
+            await tokenContract.symbol();
+            return parseInt(chainId);
+          } catch (error) {
+            continue;
+          }
+        }
+        return null;
+      };
+
+      const importTokenWithLogo = async (address, detectedChainId) => {
         try {
           // First try to get token info from DexScreener
           const response = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${address}`);
@@ -2329,7 +2463,8 @@ const SwapInterface = () => {
               ? tokenData.baseToken 
               : tokenData.quoteToken;
 
-            // Get token contract details
+            // Get token contract details using the correct chain's provider
+            const provider = new ethers.providers.JsonRpcProvider(getChainRpcUrl(detectedChainId));
             const tokenContract = new ethers.Contract(address, ERC20_ABI, provider);
             const [name, decimals] = await Promise.all([
               tokenContract.name(),
@@ -2347,53 +2482,47 @@ const SwapInterface = () => {
 
             setCustomTokens(prev => ({
               ...prev,
-              [chain.id]: {
-                ...(prev[chain.id] || {}),
+              [detectedChainId]: {
+                ...(prev[detectedChainId] || {}),
                 [tokenInfo.symbol]: newTokenInfo
               }
             }));
 
             return tokenInfo.symbol;
-          } else {
-            // Fallback to basic import if DexScreener doesn't have the token
-            const tokenContract = new ethers.Contract(address, ERC20_ABI, provider);
-            const [name, symbol, decimals] = await Promise.all([
-              tokenContract.name(),
-              tokenContract.symbol(),
-              tokenContract.decimals(),
-            ]);
-
-            const newTokenInfo = {
-              address,
-              name,
-              symbol,
-              decimals: decimals.toString(),
-              logo: null
-            };
-
-            setCustomTokens(prev => ({
-              ...prev,
-              [chain.id]: {
-                ...(prev[chain.id] || {}),
-                [symbol]: newTokenInfo
-              }
-            }));
-
-            return symbol;
           }
         } catch (error) {
           console.error('Error importing token:', error);
-          return null;
         }
+        return null;
       };
 
+      // Detect chain from tokens
+      let detectedChainId = null;
       if (fromAddress) {
-        const symbol = getTokenSymbolFromAddress(fromAddress);
+        detectedChainId = await detectTokenChain(fromAddress);
+      }
+      if (!detectedChainId && toAddress) {
+        detectedChainId = await detectTokenChain(toAddress);
+      }
+
+      // If chain detected and different from current chain, switch chain
+      if (detectedChainId && (!chain?.id || chain.id !== detectedChainId)) {
+        if (switchNetwork) {
+          try {
+            await switchNetwork(detectedChainId);
+          } catch (error) {
+            console.error('Error switching chain:', error);
+          }
+        }
+      }
+
+      // Import tokens and set symbols
+      if (fromAddress) {
+        const symbol = getTokenSymbolFromAddress(fromAddress, detectedChainId);
         if (symbol) {
           setFromTokenSymbol(symbol);
         } else {
-          // Try to import the token if not found
-          const importedSymbol = await importTokenWithLogo(fromAddress);
+          const importedSymbol = await importTokenWithLogo(fromAddress, detectedChainId);
           if (importedSymbol) {
             setFromTokenSymbol(importedSymbol);
           }
@@ -2401,12 +2530,11 @@ const SwapInterface = () => {
       }
 
       if (toAddress) {
-        const symbol = getTokenSymbolFromAddress(toAddress);
+        const symbol = getTokenSymbolFromAddress(toAddress, detectedChainId);
         if (symbol) {
           setToTokenSymbol(symbol);
         } else {
-          // Try to import the token if not found
-          const importedSymbol = await importTokenWithLogo(toAddress);
+          const importedSymbol = await importTokenWithLogo(toAddress, detectedChainId);
           if (importedSymbol) {
             setToTokenSymbol(importedSymbol);
           }
@@ -2415,7 +2543,7 @@ const SwapInterface = () => {
     }
 
     handleUrlParameters();
-  }, [chain?.id, searchParams, provider, getTokenSymbolFromAddress]);
+  }, [searchParams, chain?.id, switchNetwork, getTokenSymbolFromAddress]);
 
   // Update the showToast function
   const showToast = (title, description, status, txHash = null) => {
