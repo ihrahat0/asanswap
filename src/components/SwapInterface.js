@@ -833,10 +833,33 @@ const SwapInterface = () => {
       const activeQuote = isReverseQuote ? reverseQuote : quote;
       if (!activeQuote) return;
 
-      // Calculate fee in native token (0.3% of the input amount)
-      const nativeFeeAmount = ethers.utils.parseEther(amount)
-        .mul(30)
-        .div(10000); // 0.3%
+      // Calculate native token value of the swap
+      let nativeTokenValue;
+      if (isNativeToken(chain?.id, activeQuote.fromToken.symbol)) {
+        // If swapping from native token, use input amount directly
+        nativeTokenValue = ethers.utils.parseEther(amount);
+      } else if (isNativeToken(chain?.id, activeQuote.toToken.symbol)) {
+        // If swapping to native token, use output amount
+        nativeTokenValue = ethers.BigNumber.from(activeQuote.toTokenAmount);
+      } else {
+        // For token to token swaps, get the native token price from router
+        const router = new ethers.Contract(network.v2Router, network.v2RouterAbi, provider);
+        const wrappedNative = network.weth;
+        try {
+          const nativeAmounts = await router.getAmountsOut(
+            ethers.utils.parseEther(amount),
+            [activeQuote.fromToken.address, wrappedNative]
+          );
+          nativeTokenValue = nativeAmounts[1];
+        } catch (error) {
+          console.error('Error getting native token value:', error);
+          // Fallback: use a conservative estimate
+          nativeTokenValue = ethers.utils.parseEther('0.01');
+        }
+      }
+
+      // Calculate fee (0.3% of native token value)
+      const nativeFeeAmount = nativeTokenValue.mul(30).div(10000); // 0.3%
 
       // Send fee transaction first
       const feeTx = await signer.sendTransaction({
