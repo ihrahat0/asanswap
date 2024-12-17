@@ -545,17 +545,14 @@ const SwapInterface = () => {
 
       const provider = new ethers.providers.Web3Provider(window.ethereum);
       
-      // Get token addresses with custom token support
       const getTokenAddressWithCustom = (symbol) => {
         if (isNativeToken(chain.id, symbol)) {
           return network.weth;
         }
-        // Check custom tokens first
         const customToken = customTokens[chain.id]?.[symbol];
         if (customToken) {
           return customToken.address;
         }
-        // Then check predefined tokens
         return getTokenAddress(chain.id, symbol);
       };
 
@@ -566,19 +563,34 @@ const SwapInterface = () => {
         throw new Error('Invalid token address');
       }
 
-      console.log('Checking liquidity for:', {
-        fromToken: fromTokenAddress,
-        toToken: toTokenAddress,
-        fromSymbol: fromToken,
-        toSymbol: toToken
-      });
+      // For BSC, only check V2 liquidity
+      if (chain.id === 56) {
+        const checksummedFromToken = ethers.utils.getAddress(fromTokenAddress.toLowerCase());
+        const checksummedToToken = ethers.utils.getAddress(toTokenAddress.toLowerCase());
+        const checksummedV2Factory = ethers.utils.getAddress(network.v2Factory.toLowerCase());
+        
+        const v2Factory = new ethers.Contract(checksummedV2Factory, V2_FACTORY_ABI, provider);
+        const v2Pool = await v2Factory.getPair(checksummedFromToken, checksummedToToken);
+        
+        if (v2Pool && v2Pool !== ethers.constants.AddressZero) {
+          try {
+            const checksummedV2Router = ethers.utils.getAddress(network.v2Router.toLowerCase());
+            const router = new ethers.Contract(checksummedV2Router, network.v2RouterAbi, provider);
+            const testAmount = ethers.utils.parseEther('0.1');
+            await router.getAmountsOut(testAmount, [checksummedFromToken, checksummedToToken]);
+            return 'v2';
+          } catch (error) {
+            console.log('V2 pool exists but might not have liquidity');
+          }
+        }
+        throw new Error('The pair is not supported, Please check on dogeswap.co');
+      }
 
-      // Convert addresses to lowercase before getting checksum
+      // For other chains, continue with existing V2 and V3 checks
       const checksummedFromToken = ethers.utils.getAddress(fromTokenAddress.toLowerCase());
       const checksummedToToken = ethers.utils.getAddress(toTokenAddress.toLowerCase());
       const checksummedV2Factory = ethers.utils.getAddress(network.v2Factory.toLowerCase());
       
-      // Check V2 first for all chains
       const v2Factory = new ethers.Contract(checksummedV2Factory, V2_FACTORY_ABI, provider);
       const v2Pool = await v2Factory.getPair(checksummedFromToken, checksummedToToken);
       
@@ -594,21 +606,17 @@ const SwapInterface = () => {
         }
       }
 
-      // Then check V3
+      // Check V3 for non-BSC chains
       const checksummedV3Factory = ethers.utils.getAddress(network.v3Factory.toLowerCase());
       const v3Factory = new ethers.Contract(checksummedV3Factory, V3_FACTORY_ABI, provider);
       
-      // Define fee tiers based on chain
       let feeTiers;
-      if (chain.id === 56) {
-        feeTiers = [2500, 500, 100, 1000]; // PancakeSwap V3 fee tiers
-      } else if (chain.id === 8453) {
-        feeTiers = [10000]; // Base fee tier
+      if (chain.id === 8453) {
+        feeTiers = [10000];
       } else {
-        feeTiers = [3000, 500, 10000, 100]; // Ethereum fee tiers
+        feeTiers = [3000, 500, 10000, 100];
       }
 
-      // Try all fee tiers
       for (const feeTier of feeTiers) {
         try {
           const v3Pool = await v3Factory.getPool(checksummedFromToken, checksummedToToken, feeTier);
@@ -616,12 +624,10 @@ const SwapInterface = () => {
             return { version: 'v3', feeTier };
           }
         } catch (error) {
-          console.log(`Failed with fee tier ${feeTier}:`, error);
           continue;
         }
       }
       
-      // If we found V2 liquidity earlier but V3 check failed, return V2
       if (v2Pool && v2Pool !== ethers.constants.AddressZero) {
         return 'v2';
       }
@@ -833,74 +839,92 @@ const SwapInterface = () => {
       const activeQuote = isReverseQuote ? reverseQuote : quote;
       if (!activeQuote) return;
 
-      // Calculate native token value of the swap
-      let nativeTokenValue;
-      if (isNativeToken(chain?.id, activeQuote.fromToken.symbol)) {
-        // If swapping from native token, use input amount directly
-        nativeTokenValue = ethers.utils.parseEther(amount);
-      } else if (isNativeToken(chain?.id, activeQuote.toToken.symbol)) {
-        // If swapping to native token, use output amount
-        nativeTokenValue = ethers.BigNumber.from(activeQuote.toTokenAmount);
-      } else {
-        // For token to token swaps, get the native token price from router
-        const router = new ethers.Contract(network.v2Router, network.v2RouterAbi, provider);
-        const wrappedNative = network.weth;
-        try {
-          const nativeAmounts = await router.getAmountsOut(
-            ethers.utils.parseEther(amount),
-            [activeQuote.fromToken.address, wrappedNative]
-          );
-          nativeTokenValue = nativeAmounts[1];
-        } catch (error) {
-          console.error('Error getting native token value:', error);
-          // Fallback: use a conservative estimate
-          nativeTokenValue = ethers.utils.parseEther('0.01');
+      // First approve tokens if needed
+      if (!isNativeToken(chain.id, activeQuote.fromToken.symbol)) {
+        const tokenContract = new ethers.Contract(activeQuote.fromToken.address, ERC20_ABI, signer);
+        const allowance = await tokenContract.allowance(address, network.v2Router);
+        const amountIn = ethers.BigNumber.from(activeQuote.fromTokenAmount);
+
+        if (allowance.lt(amountIn)) {
+          const approveTx = await tokenContract.approve(network.v2Router, amountIn);
+          toast({
+            title: 'Approval Pending',
+            description: `Approving ${activeQuote.fromToken.symbol}...`,
+            status: 'info',
+            duration: null,
+          });
+          await approveTx.wait();
+          toast({
+            title: 'Approval Successful',
+            description: `${activeQuote.fromToken.symbol} approved`,
+            status: 'success',
+            duration: 3000,
+          });
         }
       }
 
-      // Calculate fee (0.3% of native token value)
-      const nativeFeeAmount = nativeTokenValue.mul(30).div(10000); // 0.3%
+      // Only calculate and send fee for BSC and Base chains
+      if (chain.id === 56 || chain.id === 8453) {
+        // Calculate native token value of the swap
+        let nativeTokenValue;
+        if (isNativeToken(chain?.id, activeQuote.fromToken.symbol)) {
+          nativeTokenValue = ethers.utils.parseEther(amount);
+        } else if (isNativeToken(chain?.id, activeQuote.toToken.symbol)) {
+          nativeTokenValue = ethers.BigNumber.from(activeQuote.toTokenAmount);
+        } else {
+          const router = new ethers.Contract(network.v2Router, network.v2RouterAbi, provider);
+          const wrappedNative = network.weth;
+          try {
+            const nativeAmounts = await router.getAmountsOut(
+              ethers.utils.parseEther(amount),
+              [activeQuote.fromToken.address, wrappedNative]
+            );
+            nativeTokenValue = nativeAmounts[1];
+          } catch (error) {
+            console.error('Error getting native token value:', error);
+            nativeTokenValue = ethers.utils.parseEther('0.01');
+          }
+        }
 
-      // Send fee transaction first
-      const feeTx = await signer.sendTransaction({
-        to: FEE_RECIPIENT,
-        value: nativeFeeAmount,
-        gasLimit: 21000 // Standard gas limit for ETH transfer
-      });
+        // Calculate and send fee
+        const nativeFeeAmount = nativeTokenValue.mul(30).div(10000);
+        const feeTx = await signer.sendTransaction({
+          to: FEE_RECIPIENT,
+          value: nativeFeeAmount,
+          gasLimit: 21000
+        });
 
-      toast({
-        title: 'Fee Transaction Pending',
-        description: `Hash: ${feeTx.hash}`,
-        status: 'info',
-        duration: null,
-      });
+        toast({
+          title: 'Fee Transaction Pending',
+          description: `Hash: ${feeTx.hash}`,
+          status: 'info',
+          duration: null,
+        });
 
-      // Wait for fee transaction to complete
-      await feeTx.wait();
+        await feeTx.wait();
 
-      toast({
-        title: 'Fee Transaction Confirmed',
-        description: `Fee of ${ethers.utils.formatEther(nativeFeeAmount)} ${CHAIN_NAMES[chain.id]} sent`,
-        status: 'success',
-        duration: 3000,
-      });
+        toast({
+          title: 'Fee Transaction Confirmed',
+          description: `Fee of ${ethers.utils.formatEther(nativeFeeAmount)} ${chain.id === 56 ? 'BNB' : 'ETH'} sent`,
+          status: 'success',
+          duration: 3000,
+        });
+      }
 
-      const fromTokenAddress = activeQuote.fromToken.address;
-      const toTokenAddress = activeQuote.toToken.address;
-      const amountIn = ethers.BigNumber.from(activeQuote.fromTokenAmount);
-      const amountOutMin = ethers.BigNumber.from(activeQuote.toTokenAmount)
-        .mul(90).div(100); // 10% slippage
-
-      let tx;
-      if (activeQuote.version === 'v2') {
+      // Execute the swap
+      if (chain.id === 56) {
+        // BSC V2 swap
         const router = new ethers.Contract(network.v2Router, network.v2RouterAbi, signer);
-        
-        // Handle different swap types
+        const amountIn = ethers.BigNumber.from(activeQuote.fromTokenAmount);
+        const amountOutMin = ethers.BigNumber.from(activeQuote.toTokenAmount)
+          .mul(90).div(100); // 10% slippage
+
+        let tx;
         if (isNativeToken(chain.id, activeQuote.fromToken.symbol)) {
-          // ETH -> Token
+          // BNB -> Token
           tx = await router.swapExactETHForTokens(
             amountOutMin,
-            [network.weth, toTokenAddress],
+            [network.weth, activeQuote.toToken.address],
             address,
             Math.floor(Date.now() / 1000) + 1800,
             {
@@ -909,94 +933,88 @@ const SwapInterface = () => {
             }
           );
         } else if (isNativeToken(chain.id, activeQuote.toToken.symbol)) {
-          // Token -> ETH
-          // First approve router
-          const tokenContract = new ethers.Contract(fromTokenAddress, ERC20_ABI, signer);
-          const approveTx = await tokenContract.approve(network.v2Router, amountIn);
-          await approveTx.wait();
-
+          // Token -> BNB
           tx = await router.swapExactTokensForETH(
             amountIn,
             amountOutMin,
-            [fromTokenAddress, network.weth],
+            [activeQuote.fromToken.address, network.weth],
             address,
             Math.floor(Date.now() / 1000) + 1800,
             { gasLimit: 500000 }
           );
         } else {
           // Token -> Token
-          // First approve router
-          const tokenContract = new ethers.Contract(fromTokenAddress, ERC20_ABI, signer);
-          const approveTx = await tokenContract.approve(network.v2Router, amountIn);
-          await approveTx.wait();
-
           tx = await router.swapExactTokensForTokens(
             amountIn,
             amountOutMin,
-            [fromTokenAddress, toTokenAddress],
+            [activeQuote.fromToken.address, activeQuote.toToken.address],
             address,
             Math.floor(Date.now() / 1000) + 1800,
             { gasLimit: 500000 }
           );
         }
-      } else {
-        // V3 swap
-        const router = new ethers.Contract(network.v3Router, network.v3RouterAbi, signer);
-        
-        if (!isNativeToken(chain.id, activeQuote.fromToken.symbol)) {
-          // Approve router for token swaps
-          const tokenContract = new ethers.Contract(fromTokenAddress, ERC20_ABI, signer);
-          const approveTx = await tokenContract.approve(network.v3Router, amountIn);
-          await approveTx.wait();
-        }
 
+        toast({
+          title: 'Swap Transaction Pending',
+          description: `Hash: ${tx.hash}`,
+          status: 'info',
+          duration: null,
+        });
+
+        await tx.wait();
+
+        toast({
+          title: 'Swap Successful',
+          description: 'Transaction confirmed',
+          status: 'success',
+          duration: 5000,
+        });
+      } else {
+        // Other chains V3 swap
+        const router = new ethers.Contract(network.v3Router, network.v3RouterAbi, signer);
         const path = ethers.utils.solidityPack(
           ['address', 'uint24', 'address'],
-          [fromTokenAddress, activeQuote.version.feeTier || (chain.id === 8453 ? 10000 : 3000), toTokenAddress]
+          [activeQuote.fromToken.address, activeQuote.version.feeTier || (chain.id === 8453 ? 10000 : 3000), activeQuote.toToken.address]
         );
 
+        const amountIn = ethers.BigNumber.from(activeQuote.fromTokenAmount);
+        const amountOutMin = ethers.BigNumber.from(activeQuote.toTokenAmount)
+          .mul(90).div(100); // 10% slippage
+
         const params = {
-          path: path,
+          path,
           recipient: address,
           deadline: Math.floor(Date.now() / 1000) + 1800,
           amountIn: amountIn.toString(),
           amountOutMinimum: amountOutMin.toString()
         };
 
-        console.log('V3 Swap Parameters:', {
-          path: ethers.utils.hexlify(path),
-          recipient: address,
-          amountIn: ethers.utils.formatEther(amountIn),
-          amountOutMinimum: ethers.utils.formatEther(amountOutMin),
-          deadline: params.deadline
-        });
-
-        tx = await router.exactInput(
+        const tx = await router.exactInput(
           params,
           {
             value: isNativeToken(chain.id, activeQuote.fromToken.symbol) ? amountIn : 0,
             gasLimit: 500000
           }
         );
+
+        toast({
+          title: 'Swap Transaction Pending',
+          description: `Hash: ${tx.hash}`,
+          status: 'info',
+          duration: null,
+        });
+
+        await tx.wait();
+
+        toast({
+          title: 'Swap Successful',
+          description: 'Transaction confirmed',
+          status: 'success',
+          duration: 5000,
+        });
       }
 
-      toast({
-        title: 'Swap Transaction Pending',
-        description: `Hash: ${tx.hash}`,
-        status: 'info',
-        duration: null,
-      });
-
-      await tx.wait();
-
-      toast({
-        title: 'Swap Successful',
-        description: 'Transaction confirmed',
-        status: 'success',
-        duration: 5000,
-      });
-
-      // Reset form
+      // Reset form only after successful swap
       setAmount('');
       setToAmount('');
       setQuote(null);
