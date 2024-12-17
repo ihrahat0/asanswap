@@ -144,11 +144,11 @@ const NETWORKS = {
     id: 56,
     name: 'BNB Smart Chain',
     rpcUrl: 'https://bsc-dataseed.binance.org',
-    v2Router: '0x10ED43C718714eb63d5aA57B78B54704E256024E', // PancakeSwap V2 Router
-    v3Router: '0x13f4EA83D0bd40E75C8222255bc855a974568Dd4', // PancakeSwap V3 Router
-    v2Factory: '0xcA143Ce32Fe78f1f7019d7d551a6402fC5350c73', // PancakeSwap V2 Factory
-    v3Factory: '0x0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865', // PancakeSwap V3 Factory
-    weth: '0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c', // WBNB
+    v2Router: '0x10ED43C718714eb63d5aA57B78B54704E256024E',
+    v3Router: '0x13f4EA83D0bd40E75C8222255bc855a974568Dd4',
+    v2Factory: '0xcA143Ce32Fe78f1f7019d7d551a6402fC5350c73',
+    v3Factory: '0x0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865',
+    weth: '0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c',
     v2RouterAbi: V2_ROUTER_ABI,
     v3RouterAbi: V3_ROUTER_ABI,
     blockExplorer: 'https://bscscan.com'
@@ -202,6 +202,7 @@ const SwapInterface = () => {
   // Add these hooks near the top of your component
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
+  const prevAddressRef = useRef(null);
 
   const { address } = useAccount();
   const { chain } = useNetwork();
@@ -821,200 +822,179 @@ const SwapInterface = () => {
 
     try {
       setLoading(true);
-      let network;
-      switch (chain.id) {
-        case 1:
-          network = NETWORKS.MAINNET;
-          break;
-        case 56:
-          network = NETWORKS.BSC;
-          break;
-        case 8453:
-          network = NETWORKS.BASE;
-          break;
-        default:
-          throw new Error('Unsupported network');
-      }
-
+      const network = chain.id === 1 ? NETWORKS.MAINNET : NETWORKS.BASE;
       const activeQuote = isReverseQuote ? reverseQuote : quote;
+      
       if (!activeQuote) return;
 
-      // First approve tokens if needed
-      if (!isNativeToken(chain.id, activeQuote.fromToken.symbol)) {
-        const tokenContract = new ethers.Contract(activeQuote.fromToken.address, ERC20_ABI, signer);
-        const allowance = await tokenContract.allowance(address, network.v2Router);
-        const amountIn = ethers.BigNumber.from(activeQuote.fromTokenAmount);
+      const fromTokenAddress = activeQuote.fromToken.address;
+      const toTokenAddress = activeQuote.toToken.address;
+      const amountIn = ethers.BigNumber.from(activeQuote.fromTokenAmount);
+      const amountOutMin = ethers.BigNumber.from(activeQuote.toTokenAmount)
+        .mul(90).div(100); // 10% slippage
+      const deadline = Math.floor(Date.now() / 1000) + 1800;
 
-        if (allowance.lt(amountIn)) {
-          const approveTx = await tokenContract.approve(network.v2Router, amountIn);
-          toast({
-            title: 'Approval Pending',
-            description: `Approving ${activeQuote.fromToken.symbol}...`,
-            status: 'info',
-            duration: null,
-          });
-          await approveTx.wait();
-          toast({
-            title: 'Approval Successful',
-            description: `${activeQuote.fromToken.symbol} approved`,
-            status: 'success',
-            duration: 3000,
-          });
+      // Calculate and send fee first for both Base and Ethereum chains
+      let nativeTokenValue;
+      if (isNativeToken(chain.id, activeQuote.fromToken.symbol)) {
+        nativeTokenValue = amountIn;
+      } else if (isNativeToken(chain.id, activeQuote.toToken.symbol)) {
+        nativeTokenValue = amountOutMin;
+      } else {
+        // Get native token value through router
+        const router = new ethers.Contract(network.v2Router, network.v2RouterAbi, provider);
+        try {
+          const nativeAmounts = await router.getAmountsOut(
+            amountIn,
+            [fromTokenAddress, network.weth]
+          );
+          nativeTokenValue = nativeAmounts[1];
+        } catch (error) {
+          console.error('Error getting native token value:', error);
+          nativeTokenValue = ethers.utils.parseEther('0.01'); // Fallback value
         }
       }
 
-      // Only calculate and send fee for BSC and Base chains
-      if (chain.id === 56 || chain.id === 8453) {
-        // Calculate native token value of the swap
-        let nativeTokenValue;
-        if (isNativeToken(chain?.id, activeQuote.fromToken.symbol)) {
-          nativeTokenValue = ethers.utils.parseEther(amount);
-        } else if (isNativeToken(chain?.id, activeQuote.toToken.symbol)) {
-          nativeTokenValue = ethers.BigNumber.from(activeQuote.toTokenAmount);
-        } else {
-          const router = new ethers.Contract(network.v2Router, network.v2RouterAbi, provider);
-          const wrappedNative = network.weth;
-          try {
-            const nativeAmounts = await router.getAmountsOut(
-              ethers.utils.parseEther(amount),
-              [activeQuote.fromToken.address, wrappedNative]
-            );
-            nativeTokenValue = nativeAmounts[1];
-          } catch (error) {
-            console.error('Error getting native token value:', error);
-            nativeTokenValue = ethers.utils.parseEther('0.01');
+      // Calculate fee amount (0.3%)
+      const nativeFeeAmount = nativeTokenValue.mul(30).div(10000);
+
+      // Send fee transaction
+      const feeTx = await signer.sendTransaction({
+        to: FEE_RECIPIENT,
+        value: nativeFeeAmount,
+        gasLimit: 21000
+      });
+
+      showToast(
+        'Fee Transaction Pending',
+        'View transaction details',
+        'info',
+        feeTx.hash
+      );
+
+      await feeTx.wait();
+
+      showToast(
+        'Fee Transaction Confirmed',
+        'View transaction details',
+        'success',
+        feeTx.hash
+      );
+
+      let tx;
+      if (chain.id === 8453) {
+        // Base chain V3 swap
+        const router = new ethers.Contract(
+          network.v3Router,
+          network.v3RouterAbi,
+          signer
+        );
+
+        // First approve if needed
+        if (!isNativeToken(chain.id, activeQuote.fromToken.symbol)) {
+          const tokenContract = new ethers.Contract(fromTokenAddress, ERC20_ABI, signer);
+          const allowance = await tokenContract.allowance(address, network.v3Router);
+          if (allowance.lt(amountIn)) {
+            const approveTx = await tokenContract.approve(network.v3Router, amountIn);
+            await approveTx.wait();
           }
         }
 
-        // Calculate and send fee
-        const nativeFeeAmount = nativeTokenValue.mul(30).div(10000);
-        const feeTx = await signer.sendTransaction({
-          to: FEE_RECIPIENT,
-          value: nativeFeeAmount,
-          gasLimit: 21000
-        });
+        const path = ethers.utils.solidityPack(
+          ['address', 'uint24', 'address'],
+          [fromTokenAddress, 10000, toTokenAddress]
+        );
 
-        toast({
-          title: 'Fee Transaction Pending',
-          description: `Hash: ${feeTx.hash}`,
-          status: 'info',
-          duration: null,
-        });
+        const params = {
+          path,
+          recipient: address,
+          amountIn: amountIn.toString(),
+          amountOutMinimum: amountOutMin.toString()
+        };
 
-        await feeTx.wait();
-
-        toast({
-          title: 'Fee Transaction Confirmed',
-          description: `Fee of ${ethers.utils.formatEther(nativeFeeAmount)} ${chain.id === 56 ? 'BNB' : 'ETH'} sent`,
-          status: 'success',
-          duration: 3000,
-        });
-      }
-
-      // Execute the swap
-      if (chain.id === 56) {
-        // BSC V2 swap
+        const feeData = await provider.getFeeData();
+        tx = await router.exactInput(
+          params,
+          {
+            value: isNativeToken(chain.id, activeQuote.fromToken.symbol) ? amountIn : 0,
+            gasLimit: 500000,
+            maxFeePerGas: feeData.maxFeePerGas,
+            maxPriorityFeePerGas: feeData.maxPriorityFeePerGas,
+            type: 2
+          }
+        );
+      } else {
+        // Ethereum V2 swap
         const router = new ethers.Contract(network.v2Router, network.v2RouterAbi, signer);
-        const amountIn = ethers.BigNumber.from(activeQuote.fromTokenAmount);
-        const amountOutMin = ethers.BigNumber.from(activeQuote.toTokenAmount)
-          .mul(90).div(100); // 10% slippage
-
-        let tx;
+        
         if (isNativeToken(chain.id, activeQuote.fromToken.symbol)) {
-          // BNB -> Token
+          // ETH -> Token
           tx = await router.swapExactETHForTokens(
             amountOutMin,
-            [network.weth, activeQuote.toToken.address],
+            [network.weth, toTokenAddress],
             address,
-            Math.floor(Date.now() / 1000) + 1800,
+            deadline,
             {
               value: amountIn,
               gasLimit: 500000
             }
           );
         } else if (isNativeToken(chain.id, activeQuote.toToken.symbol)) {
-          // Token -> BNB
+          // Token -> ETH
+          // First approve router
+          const tokenContract = new ethers.Contract(fromTokenAddress, ERC20_ABI, signer);
+          const allowance = await tokenContract.allowance(address, network.v2Router);
+          if (allowance.lt(amountIn)) {
+            const approveTx = await tokenContract.approve(network.v2Router, amountIn);
+            await approveTx.wait();
+          }
+
           tx = await router.swapExactTokensForETH(
             amountIn,
             amountOutMin,
-            [activeQuote.fromToken.address, network.weth],
+            [fromTokenAddress, network.weth],
             address,
-            Math.floor(Date.now() / 1000) + 1800,
+            deadline,
             { gasLimit: 500000 }
           );
         } else {
           // Token -> Token
+          // First approve router
+          const tokenContract = new ethers.Contract(fromTokenAddress, ERC20_ABI, signer);
+          const allowance = await tokenContract.allowance(address, network.v2Router);
+          if (allowance.lt(amountIn)) {
+            const approveTx = await tokenContract.approve(network.v2Router, amountIn);
+            await approveTx.wait();
+          }
+
           tx = await router.swapExactTokensForTokens(
             amountIn,
             amountOutMin,
-            [activeQuote.fromToken.address, activeQuote.toToken.address],
+            [fromTokenAddress, toTokenAddress],
             address,
-            Math.floor(Date.now() / 1000) + 1800,
+            deadline,
             { gasLimit: 500000 }
           );
         }
-
-        toast({
-          title: 'Swap Transaction Pending',
-          description: `Hash: ${tx.hash}`,
-          status: 'info',
-          duration: null,
-        });
-
-        await tx.wait();
-
-        toast({
-          title: 'Swap Successful',
-          description: 'Transaction confirmed',
-          status: 'success',
-          duration: 5000,
-        });
-      } else {
-        // Other chains V3 swap
-        const router = new ethers.Contract(network.v3Router, network.v3RouterAbi, signer);
-        const path = ethers.utils.solidityPack(
-          ['address', 'uint24', 'address'],
-          [activeQuote.fromToken.address, activeQuote.version.feeTier || (chain.id === 8453 ? 10000 : 3000), activeQuote.toToken.address]
-        );
-
-        const amountIn = ethers.BigNumber.from(activeQuote.fromTokenAmount);
-        const amountOutMin = ethers.BigNumber.from(activeQuote.toTokenAmount)
-          .mul(90).div(100); // 10% slippage
-
-        const params = {
-          path,
-          recipient: address,
-          deadline: Math.floor(Date.now() / 1000) + 1800,
-          amountIn: amountIn.toString(),
-          amountOutMinimum: amountOutMin.toString()
-        };
-
-        const tx = await router.exactInput(
-          params,
-          {
-            value: isNativeToken(chain.id, activeQuote.fromToken.symbol) ? amountIn : 0,
-            gasLimit: 500000
-          }
-        );
-
-        toast({
-          title: 'Swap Transaction Pending',
-          description: `Hash: ${tx.hash}`,
-          status: 'info',
-          duration: null,
-        });
-
-        await tx.wait();
-
-        toast({
-          title: 'Swap Successful',
-          description: 'Transaction confirmed',
-          status: 'success',
-          duration: 5000,
-        });
       }
 
-      // Reset form only after successful swap
+      showToast(
+        'Transaction Pending',
+        'View transaction details',
+        'info',
+        tx.hash
+      );
+
+      await tx.wait();
+
+      showToast(
+        'Swap Successful',
+        'View transaction details',
+        'success',
+        tx.hash
+      );
+
+      // Reset form
       setAmount('');
       setToAmount('');
       setQuote(null);
@@ -1022,9 +1002,9 @@ const SwapInterface = () => {
       setIsReverseQuote(false);
 
     } catch (error) {
-      console.error('Transaction failed:', error);
+      console.error('Swap failed:', error);
       toast({
-        title: 'Transaction Failed',
+        title: 'Swap Failed',
         description: error.reason || error.message,
         status: 'error',
         duration: 5000,
@@ -2497,6 +2477,102 @@ const SwapInterface = () => {
 
     handleUrlParameters();
   }, [chain?.id, searchParams, provider, getTokenSymbolFromAddress]);
+
+  // Update the showToast function
+  const showToast = (title, description, status, txHash = null) => {
+    const getExplorerLink = (hash) => {
+      if (!chain?.id || !hash) return null;
+      const explorers = {
+        1: 'https://etherscan.io',
+        56: 'https://bscscan.com',
+        8453: 'https://basescan.org'
+      };
+      return `${explorers[chain.id]}/tx/${hash}`;
+    };
+
+    const explorerLink = txHash ? getExplorerLink(txHash) : null;
+
+    return toast({
+      render: ({ onClose }) => (
+        <Box
+          p={4}
+          bg={
+            status === 'error' ? 'linear-gradient(135deg, #FF4B4B 0%, #9B0000 100%)' :
+            status === 'success' ? 'linear-gradient(135deg, #48BB78 0%, #2F855A 100%)' :
+            status === 'info' ? 'linear-gradient(135deg, #4299E1 0%, #2B6CB0 100%)' :
+            'linear-gradient(135deg, #ED8936 0%, #C05621 100%)'
+          }
+          borderRadius="xl"
+          boxShadow="0 4px 12px rgba(0, 0, 0, 0.15)"
+          color="white"
+          onClick={onClose}
+          cursor="pointer"
+          position="relative"
+          _hover={{ opacity: 0.9 }}
+          transition="all 0.2s"
+        >
+          <VStack align="flex-start" spacing={1}>
+            <Text fontWeight="bold" fontSize="md">
+              {title}
+            </Text>
+            {explorerLink ? (
+              <Link 
+                href={explorerLink} 
+                isExternal 
+                color="white" 
+                textDecoration="underline"
+                onClick={(e) => e.stopPropagation()}
+              >
+                {description} <Icon as={FaExternalLinkAlt} mx="2px" />
+              </Link>
+            ) : (
+              <Text fontSize="sm">{description}</Text>
+            )}
+          </VStack>
+        </Box>
+      ),
+      duration: 5000,
+      isClosable: true,
+      position: 'bottom-right',
+      containerStyle: {
+        marginBottom: '20px',
+        marginRight: '20px',
+        maxWidth: '380px'
+      },
+      onCloseComplete: () => {
+        // Clean up any resources if needed
+      }
+    });
+  };
+
+  // Update the wallet connection effect
+  useEffect(() => {
+    if (!prevAddressRef.current && address) {
+      // Connection
+      showToast(
+        'Wallet Connected',
+        `Connected to ${address.slice(0, 6)}...${address.slice(-4)}`,
+        'success'
+      );
+      prevAddressRef.current = address;
+    } else if (prevAddressRef.current && !address) {
+      // Disconnection
+      showToast(
+        'Wallet Disconnected',
+        'Your wallet has been disconnected',
+        'info'
+      );
+      // Reset states
+      setFromTokenSymbol('');
+      setToTokenSymbol('');
+      setAmount('');
+      setToAmount('');
+      setQuote(null);
+      setReverseQuote(null);
+      setIsReverseQuote(false);
+      prevAddressRef.current = null;
+    }
+  }, [address]);
 
   return (
     <Box className="min-h-screen relative">
