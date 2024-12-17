@@ -139,23 +139,10 @@ const NETWORKS = {
     v2RouterAbi: V2_ROUTER_ABI,
     v3RouterAbi: V3_ROUTER_ABI
   },
-  BSC: {
-    id: 56,
-    name: 'BNB Smart Chain',
-    rpcUrl: 'https://bsc-dataseed.binance.org',
-    v2Router: '0x10ED43C718714eb63d5aA57B78B54704E256024E', // PancakeSwap V2 Router
-    v3Router: '0x13f4EA83D0bd40E75C8222255bc855a974568Dd4', // PancakeSwap V3 Router
-    v2Factory: '0xcA143Ce32Fe78f1f7019d7d551a6402fC5350c73', // PancakeSwap V2 Factory
-    v3Factory: '0x0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865', // PancakeSwap V3 Factory
-    weth: '0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c', // WBNB
-    v2RouterAbi: V2_ROUTER_ABI,
-    v3RouterAbi: V3_ROUTER_ABI,
-    blockExplorer: 'https://bscscan.com'
-  },
   BASE: {
     id: 8453,
     name: 'Base',
-    rpcUrl: 'https://mainnet.base.org',
+    rpcUrl: 'https://base-mainnet.infura.io/v3/b933365d933f41ba9c566a622a2d40e3',
     v2Router: '0x8357227d4EDc78991db6FDB9Bd6ADE250536dE1d',
     v3Router: '0x2626664c2603336E57B271c5C0b26F421741e481',
     v2Factory: '0x8909Dc15E40173Ff4699343B6eb8132C65E18ec6',
@@ -170,32 +157,23 @@ const NETWORKS = {
 // Update CHAIN_LOGOS constant
 const CHAIN_LOGOS = {
   1: ethLogo,
-  56: bscLogo,
   8453: baseLogo,
 };
 
 const CHAIN_NAMES = {
   1: 'Ethereum',
-  56: 'BSC',
   8453: 'Base',
 };
 
 // Constants
-const FEE_RECIPIENT = '0xEBb9b2ea7710e87bB121d0610f5d2DD86f1Ba792';
+const FEE_RECIPIENT = '0x67FEa3f7Ba299F10269519E9987180Cb80C92C61';
 const FEE_PERCENTAGE = 0.3; // 0.3%
 
 // Add DEX names mapping
 const DEX_NAMES = {
-  1: 'Uniswap',
-  56: 'PancakeSwap',
-  8453: 'Uniswap',
+  1: 'Uniswap V2',
+  8453: 'BaseSwap',
 };
-
-// Add PancakeSwap V3 Quoter ABI
-const PANCAKE_V3_QUOTER_ABI = [
-  'function quoteExactInputSingle(tuple(address tokenIn, address tokenOut, uint256 amountIn, uint256 fee, uint160 sqrtPriceLimitX96) params) external returns (uint256 amountOut, uint160 sqrtPriceX96After, uint32 initializedTicksCrossed, uint256 gasEstimate)',
-  'function quoteExactInput(bytes path, uint256 amountIn) external returns (uint256 amountOut, uint160[] sqrtPriceX96AfterList, uint32[] initializedTicksCrossedList, uint256 gasEstimate)'
-];
 
 const SwapInterface = () => {
   const { address } = useAccount();
@@ -256,7 +234,7 @@ const SwapInterface = () => {
     if (!chain?.id) return [];
     const baseTokens = Object.keys(TOKEN_INFO[chain.id] || {});
     const customTokensList = customTokens[chain.id] ? Object.keys(customTokens[chain.id]) : [];
-    return [...customTokensList, ...baseTokens]; // Changed order to show custom tokens first
+    return [...new Set([...baseTokens, ...customTokensList])];
   }, [chain?.id, customTokens]);
 
   // Function to swap the selected tokens
@@ -522,21 +500,7 @@ const SwapInterface = () => {
   // Update checkLiquidity function
   const checkLiquidity = async (fromToken, toToken) => {
     try {
-      let network;
-      switch (chain.id) {
-        case 1:
-          network = NETWORKS.MAINNET;
-          break;
-        case 56:
-          network = NETWORKS.BSC;
-          break;
-        case 8453:
-          network = NETWORKS.BASE;
-          break;
-        default:
-          throw new Error('Unsupported network');
-      }
-
+      const network = chain.id === 1 ? NETWORKS.MAINNET : NETWORKS.BASE;
       const provider = new ethers.providers.Web3Provider(window.ethereum);
       
       // Get token addresses with custom token support
@@ -571,8 +535,9 @@ const SwapInterface = () => {
       const checksummedFromToken = ethers.utils.getAddress(fromTokenAddress.toLowerCase());
       const checksummedToToken = ethers.utils.getAddress(toTokenAddress.toLowerCase());
       const checksummedV2Factory = ethers.utils.getAddress(network.v2Factory.toLowerCase());
+      const checksummedV3Factory = ethers.utils.getAddress(network.v3Factory.toLowerCase());
       
-      // Check V2 first for all chains
+      // Check V2 first
       const v2Factory = new ethers.Contract(checksummedV2Factory, V2_FACTORY_ABI, provider);
       const v2Pool = await v2Factory.getPair(checksummedFromToken, checksummedToToken);
       
@@ -587,37 +552,14 @@ const SwapInterface = () => {
           console.log('V2 pool exists but might not have liquidity');
         }
       }
-
+      
       // Then check V3
-      const checksummedV3Factory = ethers.utils.getAddress(network.v3Factory.toLowerCase());
       const v3Factory = new ethers.Contract(checksummedV3Factory, V3_FACTORY_ABI, provider);
+      const feeTier = 10000; // 1% fee tier
+      const v3Pool = await v3Factory.getPool(checksummedFromToken, checksummedToToken, feeTier);
       
-      // Define fee tiers based on chain
-      let feeTiers;
-      if (chain.id === 56) {
-        feeTiers = [2500, 500, 100, 1000]; // PancakeSwap V3 fee tiers
-      } else if (chain.id === 8453) {
-        feeTiers = [10000]; // Base fee tier
-      } else {
-        feeTiers = [3000, 500, 10000, 100]; // Ethereum fee tiers
-      }
-
-      // Try all fee tiers
-      for (const feeTier of feeTiers) {
-        try {
-          const v3Pool = await v3Factory.getPool(checksummedFromToken, checksummedToToken, feeTier);
-          if (v3Pool && v3Pool !== ethers.constants.AddressZero) {
-            return { version: 'v3', feeTier };
-          }
-        } catch (error) {
-          console.log(`Failed with fee tier ${feeTier}:`, error);
-          continue;
-        }
-      }
-      
-      // If we found V2 liquidity earlier but V3 check failed, return V2
-      if (v2Pool && v2Pool !== ethers.constants.AddressZero) {
-        return 'v2';
+      if (v3Pool && v3Pool !== ethers.constants.AddressZero) {
+        return 'v3';
       }
       
       throw new Error('No active liquidity pool found');
@@ -644,21 +586,8 @@ const SwapInterface = () => {
 
     try {
       setLoading(true);
-      let network;
-      switch (chain.id) {
-        case 1:
-          network = NETWORKS.MAINNET;
-          break;
-        case 56:
-          network = NETWORKS.BSC;
-          break;
-        case 8453:
-          network = NETWORKS.BASE;
-          break;
-        default:
-          throw new Error('Unsupported network');
-      }
-
+      const network = chain.id === 1 ? NETWORKS.MAINNET : NETWORKS.BASE;
+      
       // Get token addresses with custom token support
       const getTokenAddressWithCustom = (symbol) => {
         if (isNativeToken(chain.id, symbol)) {
@@ -699,54 +628,52 @@ const SwapInterface = () => {
         const amounts = await router.getAmountsOut(amountIn, [fromTokenAddress, toTokenAddress]);
         amountOut = amounts[amounts.length - 1];
       } else {
-        // V3 quote using the correct quoter contract based on chain
-        let quoterAddress;
-        let quoterAbi;
-        
-        if (chain.id === 56) {
-          // PancakeSwap V3 Quoter
-          quoterAddress = '0xB048Bbc1Ee6b733FFfCFb9e9CeF7375518e25997';
-          quoterAbi = PANCAKE_V3_QUOTER_ABI;
-        } else if (chain.id === 1) {
-          // Uniswap V3 Quoter
-          quoterAddress = '0xb27308f9F90D607463bb33eA1BeBb41C27CE5AB6';
-          quoterAbi = [
-            'function quoteExactInput(bytes path, uint256 amountIn) external returns (uint256 amountOut)'
-          ];
-        } else {
-          // Base V3 Quoter
-          quoterAddress = '0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a';
-          quoterAbi = [
-            'function quoteExactInput(bytes path, uint256 amountIn) external returns (uint256 amountOut)'
-          ];
-        }
+        // V3 quote using the correct quoter contract
+        const quoterAddress = chain.id === 1 
+          ? '0xb27308f9F90D607463bb33eA1BeBb41C27CE5AB6'  // Mainnet V3 Quoter
+          : '0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a'; // Base V3 Quoter
+
+        const quoterAbi = [
+          'function quoteExactInputSingle(tuple(address tokenIn, address tokenOut, uint256 amountIn, uint256 fee, uint160 sqrtPriceLimitX96) params) external returns (uint256 amountOut)',
+          'function quoteExactInput(bytes path, uint256 amountIn) external returns (uint256 amountOut)'
+        ];
 
         const quoter = new ethers.Contract(quoterAddress, quoterAbi, provider);
 
         try {
-          if (chain.id === 56) {
-            // PancakeSwap V3 specific quoting
-            const params = {
-              tokenIn: fromTokenAddress,
-              tokenOut: toTokenAddress,
-              amountIn: amountIn,
-              fee: version.feeTier || 2500,
-              sqrtPriceLimitX96: 0
-            };
+          // First try with 0.3% fee
+          const params = {
+            tokenIn: fromTokenAddress,
+            tokenOut: toTokenAddress,
+            amountIn: amountIn,
+            fee: 3000,  // 0.3%
+            sqrtPriceLimitX96: 0
+          };
 
-            const quote = await quoter.callStatic.quoteExactInputSingle(params);
-            amountOut = quote[0]; // First element is amountOut
-          } else {
-            // Other V3 exchanges
+          amountOut = await quoter.callStatic.quoteExactInputSingle(params);
+        } catch (error) {
+          // If 0.3% fails, try with 1% fee
+          console.log('Retrying with 1% fee pool');
+          const params = {
+            tokenIn: fromTokenAddress,
+            tokenOut: toTokenAddress,
+            amountIn: amountIn,
+            fee: 10000, // 1%
+            sqrtPriceLimitX96: 0
+          };
+
+          try {
+            amountOut = await quoter.callStatic.quoteExactInputSingle(params);
+          } catch (retryError) {
+            // If both fail, try with encoded path
+            console.log('Trying with encoded path');
             const path = ethers.utils.solidityPack(
               ['address', 'uint24', 'address'],
-              [fromTokenAddress, version.feeTier || (chain.id === 8453 ? 10000 : 3000), toTokenAddress]
+              [fromTokenAddress, 10000, toTokenAddress]
             );
+            
             amountOut = await quoter.callStatic.quoteExactInput(path, amountIn);
           }
-        } catch (error) {
-          console.error('V3 quote failed:', error);
-          throw error;
         }
       }
 
@@ -809,58 +736,17 @@ const SwapInterface = () => {
 
     try {
       setLoading(true);
-      let network;
-      switch (chain.id) {
-        case 1:
-          network = NETWORKS.MAINNET;
-          break;
-        case 56:
-          network = NETWORKS.BSC;
-          break;
-        case 8453:
-          network = NETWORKS.BASE;
-          break;
-        default:
-          throw new Error('Unsupported network');
-      }
-
+      const network = chain.id === 1 ? NETWORKS.MAINNET : NETWORKS.BASE;
       const activeQuote = isReverseQuote ? reverseQuote : quote;
+      
       if (!activeQuote) return;
-
-      // Calculate fee in native token (0.3% of the input amount)
-      const nativeFeeAmount = ethers.utils.parseEther(amount)
-        .mul(30)
-        .div(10000); // 0.3%
-
-      // Send fee transaction first
-      const feeTx = await signer.sendTransaction({
-        to: FEE_RECIPIENT,
-        value: nativeFeeAmount,
-        gasLimit: 21000 // Standard gas limit for ETH transfer
-      });
-
-      toast({
-        title: 'Fee Transaction Pending',
-        description: `Hash: ${feeTx.hash}`,
-        status: 'info',
-        duration: null,
-      });
-
-      // Wait for fee transaction to complete
-      await feeTx.wait();
-
-      toast({
-        title: 'Fee Transaction Confirmed',
-        description: `Fee of ${ethers.utils.formatEther(nativeFeeAmount)} ${CHAIN_NAMES[chain.id]} sent`,
-        status: 'success',
-        duration: 3000,
-      });
 
       const fromTokenAddress = activeQuote.fromToken.address;
       const toTokenAddress = activeQuote.toToken.address;
       const amountIn = ethers.BigNumber.from(activeQuote.fromTokenAmount);
       const amountOutMin = ethers.BigNumber.from(activeQuote.toTokenAmount)
         .mul(90).div(100); // 10% slippage
+      const deadline = Math.floor(Date.now() / 1000) + 1800;
 
       let tx;
       if (activeQuote.version === 'v2') {
@@ -873,7 +759,7 @@ const SwapInterface = () => {
             amountOutMin,
             [network.weth, toTokenAddress],
             address,
-            Math.floor(Date.now() / 1000) + 1800,
+            deadline,
             {
               value: amountIn,
               gasLimit: 500000
@@ -891,7 +777,7 @@ const SwapInterface = () => {
             amountOutMin,
             [fromTokenAddress, network.weth],
             address,
-            Math.floor(Date.now() / 1000) + 1800,
+            deadline,
             { gasLimit: 500000 }
           );
         } else {
@@ -906,7 +792,7 @@ const SwapInterface = () => {
             amountOutMin,
             [fromTokenAddress, toTokenAddress],
             address,
-            Math.floor(Date.now() / 1000) + 1800,
+            deadline,
             { gasLimit: 500000 }
           );
         }
@@ -923,16 +809,27 @@ const SwapInterface = () => {
 
         const path = ethers.utils.solidityPack(
           ['address', 'uint24', 'address'],
-          [fromTokenAddress, activeQuote.version.feeTier || (chain.id === 8453 ? 10000 : 3000), toTokenAddress]
+          [fromTokenAddress, 10000, toTokenAddress]
         );
 
-        const params = {
-          path: path,
-          recipient: address,
-          deadline: Math.floor(Date.now() / 1000) + 1800,
-          amountIn: amountIn.toString(),
-          amountOutMinimum: amountOutMin.toString()
-        };
+        // Properly structure V3 parameters based on chain
+        let params;
+        if (chain.id === 8453) {  // Base Chain
+          params = {
+            path: path,
+            recipient: address,
+            amountIn: amountIn.toString(),
+            amountOutMinimum: amountOutMin.toString()
+          };
+        } else {  // Ethereum Mainnet
+          params = {
+            path: path,
+            recipient: address,
+            deadline: Math.floor(Date.now() / 1000) + 1800,
+            amountIn: amountIn.toString(),
+            amountOutMinimum: amountOutMin.toString()
+          };
+        }
 
         console.log('V3 Swap Parameters:', {
           path: ethers.utils.hexlify(path),
@@ -942,17 +839,31 @@ const SwapInterface = () => {
           deadline: params.deadline
         });
 
-        tx = await router.exactInput(
-          params,
-          {
-            value: isNativeToken(chain.id, activeQuote.fromToken.symbol) ? amountIn : 0,
-            gasLimit: 500000
-          }
-        );
+        if (chain.id === 8453) {  // Base Chain
+          const feeData = await provider.getFeeData();
+          tx = await router.exactInput(
+            params,
+            {
+              value: isNativeToken(chain.id, activeQuote.fromToken.symbol) ? amountIn : 0,
+              gasLimit: 500000,
+              maxFeePerGas: feeData.maxFeePerGas,
+              maxPriorityFeePerGas: feeData.maxPriorityFeePerGas,
+              type: 2
+            }
+          );
+        } else {  // Ethereum Mainnet
+          tx = await router.exactInput(
+            params,
+            {
+              value: isNativeToken(chain.id, activeQuote.fromToken.symbol) ? amountIn : 0,
+              gasLimit: 500000
+            }
+          );
+        }
       }
 
       toast({
-        title: 'Swap Transaction Pending',
+        title: 'Transaction Pending',
         description: `Hash: ${tx.hash}`,
         status: 'info',
         duration: null,
@@ -975,9 +886,9 @@ const SwapInterface = () => {
       setIsReverseQuote(false);
 
     } catch (error) {
-      console.error('Transaction failed:', error);
+      console.error('Swap failed:', error);
       toast({
-        title: 'Transaction Failed',
+        title: 'Swap Failed',
         description: error.reason || error.message,
         status: 'error',
         duration: 5000,
@@ -1756,7 +1667,7 @@ const SwapInterface = () => {
     </Modal>
   );
 
-  // Replace the ChainSelect component with this updated version
+  // Replace the ChainSelect component with this new version
   const ChainSelect = () => {
     const { chain } = useNetwork();
     const { switchNetwork, isLoading } = useSwitchNetwork();
@@ -1765,9 +1676,7 @@ const SwapInterface = () => {
 
     const chains = [
       { id: 1, name: 'Ethereum' },
-      { id: 56, name: 'BSC' },
       { id: 8453, name: 'Base' },
-      { id: 'solana', name: 'Solana', externalLink: 'https://solana.dogeswap.co' },
     ];
 
     // Handle click outside to close menu
@@ -1782,12 +1691,8 @@ const SwapInterface = () => {
       return () => document.removeEventListener('mousedown', handleClickOutside);
     }, []);
 
-    const handleChainClick = (chainId, externalLink) => {
-      if (externalLink) {
-        window.location.href = externalLink;
-        return;
-      }
-      switchNetwork?.(parseInt(chainId));
+    const handleChainClick = (chainId) => {
+      switchNetwork?.(chainId);
       setIsOpen(false);
     };
 
@@ -1818,18 +1723,17 @@ const SwapInterface = () => {
               {chains.map((c) => (
                 <Button
                   key={c.id}
-                  onClick={() => handleChainClick(c.id, c.externalLink)}
+                  onClick={() => handleChainClick(c.id)}
                   className="chain-switcher-option"
                   variant="ghost"
                 >
                   <HStack spacing={3} width="100%" justify="flex-start">
                     <Image
-                      src={c.id === 'solana' ? solanaLogo : CHAIN_LOGOS[c.id]}
+                      src={CHAIN_LOGOS[c.id]}
                       alt={c.name}
                       className="chain-logo"
                     />
                     <Text className="chain-name">{c.name}</Text>
-                    {c.externalLink && <Icon as={FaExternalLinkAlt} ml="auto" />}
                   </HStack>
                 </Button>
               ))}

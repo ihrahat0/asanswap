@@ -524,6 +524,13 @@ export const TOKEN_INFO = {
       symbol: 'WETH',
       logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/base/assets/0x4200000000000000000000000000000000000006/logo.png'
     },
+    SCI: { 
+      address: '0x25E0A7767d03461EaF88b47cd9853722Fe05DFD3', 
+      decimals: 18,
+      name: 'PoSciDonDAO Token',
+      symbol: 'SCI',
+      logo: 'https://dd.dexscreener.com/ds-data/tokens/base/0x25e0a7767d03461eaf88b47cd9853722fe05dfd3.png?size=lg&key=a18123'
+    },
     USDbC: { 
       address: '0xd9aAEc86B65D86f6A7B5B1b0c42FFA531710b6CA', 
       decimals: 6,

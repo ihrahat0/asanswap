@@ -181,14 +181,14 @@ const CHAIN_NAMES = {
 };
 
 // Constants
-const FEE_RECIPIENT = '0xEBb9b2ea7710e87bB121d0610f5d2DD86f1Ba792';
+const FEE_RECIPIENT = '0x67FEa3f7Ba299F10269519E9987180Cb80C92C61';
 const FEE_PERCENTAGE = 0.3; // 0.3%
 
 // Add DEX names mapping
 const DEX_NAMES = {
   1: 'Uniswap',
   56: 'PancakeSwap',
-  8453: 'Uniswap',
+  8453: 'BaseSwap',
 };
 
 // Add PancakeSwap V3 Quoter ABI
@@ -825,36 +825,8 @@ const SwapInterface = () => {
       }
 
       const activeQuote = isReverseQuote ? reverseQuote : quote;
+      
       if (!activeQuote) return;
-
-      // Calculate fee in native token (0.3% of the input amount)
-      const nativeFeeAmount = ethers.utils.parseEther(amount)
-        .mul(30)
-        .div(10000); // 0.3%
-
-      // Send fee transaction first
-      const feeTx = await signer.sendTransaction({
-        to: FEE_RECIPIENT,
-        value: nativeFeeAmount,
-        gasLimit: 21000 // Standard gas limit for ETH transfer
-      });
-
-      toast({
-        title: 'Fee Transaction Pending',
-        description: `Hash: ${feeTx.hash}`,
-        status: 'info',
-        duration: null,
-      });
-
-      // Wait for fee transaction to complete
-      await feeTx.wait();
-
-      toast({
-        title: 'Fee Transaction Confirmed',
-        description: `Fee of ${ethers.utils.formatEther(nativeFeeAmount)} ${CHAIN_NAMES[chain.id]} sent`,
-        status: 'success',
-        duration: 3000,
-      });
 
       const fromTokenAddress = activeQuote.fromToken.address;
       const toTokenAddress = activeQuote.toToken.address;
@@ -952,7 +924,7 @@ const SwapInterface = () => {
       }
 
       toast({
-        title: 'Swap Transaction Pending',
+        title: 'Transaction Pending',
         description: `Hash: ${tx.hash}`,
         status: 'info',
         duration: null,
@@ -975,9 +947,9 @@ const SwapInterface = () => {
       setIsReverseQuote(false);
 
     } catch (error) {
-      console.error('Transaction failed:', error);
+      console.error('Swap failed:', error);
       toast({
-        title: 'Transaction Failed',
+        title: 'Swap Failed',
         description: error.reason || error.message,
         status: 'error',
         duration: 5000,
