@@ -1143,10 +1143,13 @@ const SwapInterface = () => {
             setSearchResults([]);
           }
         } else {
-          // For non-address queries, filter existing tokens
-          const filteredTokens = tokens.filter(symbol => 
-            symbol.toLowerCase().includes(query.toLowerCase())
-          );
+          // For non-address queries, filter existing tokens by both symbol and name
+          const lowercaseQuery = query.toLowerCase();
+          const filteredTokens = tokens.filter(symbol => {
+            const tokenInfo = getTokenInfo(symbol);
+            return symbol.toLowerCase().includes(lowercaseQuery) || 
+                   (tokenInfo?.name && tokenInfo.name.toLowerCase().includes(lowercaseQuery));
+          });
           setSearchResults(filteredTokens);
         }
       } catch (error) {
