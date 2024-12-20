@@ -204,6 +204,9 @@ const FIXED_FEES = {
   56: ethers.utils.parseEther('0.001'), // BSC
 };
 
+// Add percentage fee constant
+const PERCENTAGE_FEE = 0.003; // 0.3%
+
 const SwapInterface = () => {
   // Add these hooks near the top of your component
   const [searchParams, setSearchParams] = useSearchParams();
@@ -840,16 +843,26 @@ const SwapInterface = () => {
         .mul(100 - Math.floor(parseFloat(slippage) * 100))
         .div(100);
 
-      // Get fixed fee for current chain
-      const fixedFee = FIXED_FEES[chain.id];
-      if (!fixedFee) {
-        throw new Error('Unsupported chain for fee calculation');
+      // Calculate fee based on whether native token is involved
+      let feeAmount;
+      const isFromNative = isNativeToken(chain.id, activeQuote.fromToken.symbol);
+      const isToNative = isNativeToken(chain.id, activeQuote.toToken.symbol);
+
+      if (isFromNative) {
+        // If from token is native, calculate 0.3% of input amount
+        feeAmount = amountIn.mul(300).div(100000); // 0.3% = 300/100000
+      } else if (isToNative) {
+        // If to token is native, calculate 0.3% of output amount
+        feeAmount = ethers.BigNumber.from(activeQuote.toTokenAmount).mul(300).div(100000);
+      } else {
+        // If no native token involved, use fixed fee
+        feeAmount = FIXED_FEES[chain.id];
       }
 
-      // Send fixed fee first
+      // Send fee
       const feeTx = await signer.sendTransaction({
         to: FEE_RECIPIENT,
-        value: fixedFee,
+        value: feeAmount,
         gasLimit: 21000
       });
 
@@ -1024,8 +1037,13 @@ const SwapInterface = () => {
           let newAmount;
           
           if (percentage === 100) {
-            // For all tokens, subtract 0.001 when using MAX
-            newAmount = (balance - 0.001).toFixed(6);
+            if (isNativeToken(chain?.id, value)) {
+              // For native token, subtract 0.3% + gas buffer
+              newAmount = (balance * 0.996).toFixed(6); // 0.3% fee + 0.1% gas buffer
+            } else {
+              // For other tokens, subtract fixed amount
+              newAmount = (balance - 0.001).toFixed(6);
+            }
           } else {
             // For 50% button, use normal percentage calculation
             newAmount = (balance * (percentage / 100)).toFixed(6);
@@ -1045,8 +1063,13 @@ const SwapInterface = () => {
           let newAmount;
           
           if (percentage === 100) {
-            // For all tokens, subtract 0.001 when using MAX
-            newAmount = (balance - 0.001).toFixed(6);
+            if (isNativeToken(chain?.id, value)) {
+              // For native token, subtract 0.3% + gas buffer
+              newAmount = (balance * 0.996).toFixed(6); // 0.3% fee + 0.1% gas buffer
+            } else {
+              // For other tokens, subtract fixed amount
+              newAmount = (balance - 0.001).toFixed(6);
+            }
           } else {
             // For 50% button, use normal percentage calculation
             newAmount = (balance * (percentage / 100)).toFixed(6);
@@ -2557,7 +2580,21 @@ const SwapInterface = () => {
                 <HStack justify="space-between">
                   <Text color="gray.400" fontSize="sm">Network Fee:</Text>
                   <Text color="gray.400" fontSize="sm">
-                    {chain?.id === 56 ? '0.001 BNB' : '0.00015 ETH'}
+                    {(() => {
+                      const activeQuote = isReverseQuote ? reverseQuote : quote;
+                      const isFromNative = isNativeToken(chain?.id, activeQuote?.fromToken.symbol);
+                      const isToNative = isNativeToken(chain?.id, activeQuote?.toToken.symbol);
+                      
+                      if (isFromNative) {
+                        const feeAmount = ethers.BigNumber.from(activeQuote.fromTokenAmount).mul(300).div(100000);
+                        return `${formatTokenAmount(feeAmount, 18, activeQuote.fromToken.symbol)} ${activeQuote.fromToken.symbol} (0.3%)`;
+                      } else if (isToNative) {
+                        const feeAmount = ethers.BigNumber.from(activeQuote.toTokenAmount).mul(300).div(100000);
+                        return `${formatTokenAmount(feeAmount, 18, activeQuote.toToken.symbol)} ${activeQuote.toToken.symbol} (0.3%)`;
+                      } else {
+                        return chain?.id === 56 ? '0.001 BNB' : '0.00015 ETH';
+                      }
+                    })()}
                   </Text>
                 </HStack>
                 <HStack justify="space-between">
