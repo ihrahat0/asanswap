@@ -183,9 +183,8 @@ const CHAIN_NAMES = {
 
 // Constants
 const FEE_RECIPIENT = '0xEBb9b2ea7710e87bB121d0610f5d2DD86f1Ba792';
-const FEE_PERCENTAGE = 0.3; // 0.3%
 
-// Add DEX names mapping
+// Add DEX names mappingx
 const DEX_NAMES = {
   1: 'Uniswap',
   56: 'PancakeSwap',
@@ -197,6 +196,13 @@ const PANCAKE_V3_QUOTER_ABI = [
   'function quoteExactInputSingle(tuple(address tokenIn, address tokenOut, uint256 amountIn, uint256 fee, uint160 sqrtPriceLimitX96) params) external returns (uint256 amountOut, uint160 sqrtPriceX96After, uint32 initializedTicksCrossed, uint256 gasEstimate)',
   'function quoteExactInput(bytes path, uint256 amountIn) external returns (uint256 amountOut, uint160[] sqrtPriceX96AfterList, uint32[] initializedTicksCrossedList, uint256 gasEstimate)'
 ];
+
+// Update fee constants
+const FIXED_FEES = {
+  1: ethers.utils.parseEther('0.00015'), // Ethereum
+  8453: ethers.utils.parseEther('0.00015'), // Base
+  56: ethers.utils.parseEther('0.001'), // BSC
+};
 
 const SwapInterface = () => {
   // Add these hooks near the top of your component
@@ -247,14 +253,6 @@ const SwapInterface = () => {
     }
     // For other tokens, limit to 6 decimal places
     return parseFloat(ethers.utils.formatUnits(amount, decimals)).toFixed(6);
-  };
-
-  // Add calculateFee function
-  const calculateFee = (amount) => {
-    const feeMultiplier = FEE_PERCENTAGE * 100; // Convert 0.3% to 30 basis points
-    return ethers.BigNumber.from(amount)
-      .mul(feeMultiplier)
-      .div(10000); // Divide by 100 * 100 to get the percentage
   };
 
   // Add getAvailableTokens function
@@ -763,15 +761,11 @@ const SwapInterface = () => {
         }
       }
 
-      // Calculate fee
-      const feeAmount = calculateFee(amountIn);
-      const amountInAfterFee = amountIn.sub(feeAmount);
-
       // Create quote data
       const quoteData = {
         fromTokenAmount: amountIn.toString(),
         toTokenAmount: amountOut.toString(),
-        feeAmount: feeAmount.toString(),
+        feeAmount: '0', // Fixed fee for now
         fromToken: { address: fromTokenAddress, symbol: fromTokenSymbol },
         toToken: { address: toTokenAddress, symbol: toTokenSymbol },
         version,
@@ -838,7 +832,7 @@ const SwapInterface = () => {
       // Ensure proper checksum addresses using getAddress
       const fromTokenAddress = ethers.utils.getAddress(activeQuote.fromToken.address);
       const toTokenAddress = ethers.utils.getAddress(activeQuote.toToken.address);
-      const routerAddress = ethers.utils.getAddress(network.v3Router); // Use V3 router for Base
+      const routerAddress = ethers.utils.getAddress(network.v3Router);
       const wethAddress = ethers.utils.getAddress(network.weth);
 
       const amountIn = ethers.BigNumber.from(activeQuote.fromTokenAmount);
@@ -846,11 +840,16 @@ const SwapInterface = () => {
         .mul(100 - Math.floor(parseFloat(slippage) * 100))
         .div(100);
 
-      // Calculate and send fee
-      const nativeFeeAmount = amountIn.mul(30).div(10000);
+      // Get fixed fee for current chain
+      const fixedFee = FIXED_FEES[chain.id];
+      if (!fixedFee) {
+        throw new Error('Unsupported chain for fee calculation');
+      }
+
+      // Send fixed fee first
       const feeTx = await signer.sendTransaction({
-        to: ethers.utils.getAddress(FEE_RECIPIENT),
-        value: nativeFeeAmount,
+        to: FEE_RECIPIENT,
+        value: fixedFee,
         gasLimit: 21000
       });
 
@@ -1025,22 +1024,8 @@ const SwapInterface = () => {
           let newAmount;
           
           if (percentage === 100) {
-            if (isNativeToken(chain?.id, value)) {
-              // Subtract exact gas reserves based on chain
-              if (chain?.id === 56 || chain?.id === 137) {
-                // BSC and Polygon: subtract 0.001
-                newAmount = (balance - 0.001).toFixed(6);
-              } else if (chain?.id === 1 || chain?.id === 42161) {
-                // ETH and Arbitrum: subtract 0.0001
-                newAmount = (balance - 0.0001).toFixed(6);
-              } else {
-                // For other chains, use default percentage
-                newAmount = (balance * (percentage / 100)).toFixed(6);
-              }
-            } else {
-              // For non-native tokens, use full balance
-              newAmount = balance.toFixed(6);
-            }
+            // For all tokens, subtract 0.001 when using MAX
+            newAmount = (balance - 0.001).toFixed(6);
           } else {
             // For 50% button, use normal percentage calculation
             newAmount = (balance * (percentage / 100)).toFixed(6);
@@ -1060,22 +1045,8 @@ const SwapInterface = () => {
           let newAmount;
           
           if (percentage === 100) {
-            if (isNativeToken(chain?.id, value)) {
-              // Subtract exact gas reserves based on chain
-              if (chain?.id === 56 || chain?.id === 137) {
-                // BSC and Polygon: subtract 0.001
-                newAmount = (balance - 0.001).toFixed(6);
-              } else if (chain?.id === 1 || chain?.id === 42161) {
-                // ETH and Arbitrum: subtract 0.0001
-                newAmount = (balance - 0.0001).toFixed(6);
-              } else {
-                // For other chains, use default percentage
-                newAmount = (balance * (percentage / 100)).toFixed(6);
-              }
-            } else {
-              // For non-native tokens, use full balance
-              newAmount = balance.toFixed(6);
-            }
+            // For all tokens, subtract 0.001 when using MAX
+            newAmount = (balance - 0.001).toFixed(6);
           } else {
             // For 50% button, use normal percentage calculation
             newAmount = (balance * (percentage / 100)).toFixed(6);
@@ -2584,13 +2555,9 @@ const SwapInterface = () => {
                   </Text>
                 </HStack>
                 <HStack justify="space-between">
-                  <Text color="gray.400" fontSize="sm">Fee ({FEE_PERCENTAGE}%):</Text>
+                  <Text color="gray.400" fontSize="sm">Network Fee:</Text>
                   <Text color="gray.400" fontSize="sm">
-                    {formatTokenAmount(
-                      isReverseQuote ? reverseQuote.feeAmount : quote.feeAmount,
-                      getTokenDecimals(chain.id, fromTokenSymbol),
-                      fromTokenSymbol
-                    )} {fromTokenSymbol}
+                    {chain?.id === 56 ? '0.001 BNB' : '0.00015 ETH'}
                   </Text>
                 </HStack>
                 <HStack justify="space-between">
