@@ -1,7 +1,6 @@
 {
   "name": "dex",
   "version": "0.1.0",
-  "homepage": "/v2",
   "private": true,
   "dependencies": {
     "@chakra-ui/react": "^1.8.9",
