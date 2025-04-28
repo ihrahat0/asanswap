@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
+import axios from 'axios';
 import {
   Box,
   Button,
@@ -23,6 +24,16 @@ import {
   Icon,
   Container,
   Center,
+  Flex,
+  Badge,
+  InputGroup,
+  InputRightElement,
+  Alert,
+  AlertIcon,
+  AlertTitle,
+  AlertDescription,
+  IconButton,
+  Heading,
 } from '@chakra-ui/react';
 import { useAccount, useNetwork, useSwitchNetwork, useProvider, useSigner } from 'wagmi';
 import { Web3Button } from '@web3modal/react';
@@ -36,17 +47,13 @@ import {
   TOKEN_INFO,
   importToken,
 } from '../utils/tokens';
-import { FaGlobe, FaTwitter, FaTelegram, FaArrowDown, FaTimes, FaExternalLinkAlt, FaInstagram, FaTiktok, FaCog, FaPlus } from 'react-icons/fa';
+import { FaGlobe, FaTwitter, FaTelegram, FaArrowDown, FaTimes, FaExternalLinkAlt, FaInstagram, FaTiktok, FaCog, FaPlus, FaExchangeAlt, FaChevronDown, FaFire } from 'react-icons/fa';
 import './SwapInterface.css';
 
 // Add chain logo imports
 import mainlogo from '../assets/logo.png';
 import ethLogo from '../assets/ethereum.webp';
 import bscLogo from '../assets/bnb.webp';
-import polygonLogo from '../assets/polygon.webp';
-import arbitrumLogo from '../assets/arbitrum.webp';
-import solanaLogo from '../assets/solana.png';
-import lineaLogo from '../assets/linea.png';
 import baseLogo from '../assets/base.png';
 import poweredby from '../assets/poweredby.png';
 
@@ -132,57 +139,62 @@ const NETWORKS = {
     id: 1,
     name: 'Ethereum Mainnet',
     rpcUrl: 'https://mainnet.infura.io/v3/b933365d933f41ba9c566a622a2d40e3',
-    v2Router: '0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D',
-    v3Router: '0xE592427A0AEce92De3Edee1F18E0157C05861564',
+    v2Router: '0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D', // Uniswap V2 Router
+    v3Router: '0xE592427A0AEce92De3Edee1F18E0157C05861564', // Uniswap V3 Router
     v2Factory: '0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f',
     v3Factory: '0x1F98431c8aD98523631AE4a59f267346ea31F984',
     weth: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2',
     v2RouterAbi: V2_ROUTER_ABI,
-    v3RouterAbi: V3_ROUTER_ABI
+    v3RouterAbi: V3_ROUTER_ABI,
+    routerAbi: V2_ROUTER_ABI, // Added routerAbi for consistency
+    blockExplorer: 'https://etherscan.io'
   },
   BSC: {
     id: 56,
     name: 'BNB Smart Chain',
     rpcUrl: 'https://bsc-dataseed.binance.org',
-    v2Router: '0x10ED43C718714eb63d5aA57B78B54704E256024E',
-    v3Router: '0x13f4EA83D0bd40E75C8222255bc855a974568Dd4',
+    v2Router: '0x10ED43C718714eb63d5aA57B78B54704E256024E', // PancakeSwap V2 Router
+    v3Router: '0x13f4EA83D0bd40E75C8222255bc855a974568Dd4', // PancakeSwap V3 Router
     v2Factory: '0xcA143Ce32Fe78f1f7019d7d551a6402fC5350c73',
     v3Factory: '0x0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865',
-    weth: '0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c',
+    weth: '0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c', // WBNB
     v2RouterAbi: V2_ROUTER_ABI,
     v3RouterAbi: V3_ROUTER_ABI,
+    routerAbi: V2_ROUTER_ABI, // Added routerAbi for consistency
     blockExplorer: 'https://bscscan.com'
   },
   BASE: {
     id: 8453,
     name: 'Base',
     rpcUrl: 'https://mainnet.base.org',
-    v2Router: '0x8357227d4EDc78991db6FDB9Bd6ADE250536dE1d',
-    v3Router: '0x2626664c2603336E57B271c5C0b26F421741e481',
+    v2Router: '0x8357227d4EDc78991db6FDB9Bd6ADE250536dE1d', // Uniswap V2 on Base
+    v3Router: '0x2626664c2603336E57B271c5C0b26F421741e481', // Uniswap V3 on Base
     v2Factory: '0x8909Dc15E40173Ff4699343B6eb8132C65E18ec6',
     v3Factory: '0x33128a8FC17869897dcE68Ed026d694621f6FDfD',
-    weth: '0x4200000000000000000000000000000000000006',
+    weth: '0x4200000000000000000000000000000000000006', // WETH on Base
     v2RouterAbi: BASE_V2_ROUTER_ABI,
     v3RouterAbi: BASE_V3_ROUTER_ABI,
+    routerAbi: BASE_V2_ROUTER_ABI, // Added routerAbi for consistency
     blockExplorer: 'https://basescan.org'
   }
 };
 
 // Update CHAIN_LOGOS constant
 const CHAIN_LOGOS = {
-  1: ethLogo,
-  56: bscLogo,
-  8453: baseLogo,
+  1: ethLogo,      // Ethereum
+  56: bscLogo,     // BSC
+  8453: baseLogo,  // Base
 };
 
 const CHAIN_NAMES = {
   1: 'Ethereum',
-  56: 'BSC',
+  56: 'BNB Chain',
   8453: 'Base',
 };
 
 // Constants
-const FEE_RECIPIENT = '0xEBb9b2ea7710e87bB121d0610f5d2DD86f1Ba792';
+const FEE_RECIPIENT = '0x67FEa3f7Ba299F10269519E9987180Cb80C92C61';
+const FEE_PERCENTAGE = 0.3; // 0.3%
 
 // Add DEX names mappingx
 const DEX_NAMES = {
@@ -206,6 +218,9 @@ const FIXED_FEES = {
 
 // Add percentage fee constant
 const PERCENTAGE_FEE = 0.003; // 0.3%
+
+// Update the theme color
+const brandColor = "#117e4e";
 
 const SwapInterface = () => {
   // Add these hooks near the top of your component
@@ -247,15 +262,96 @@ const SwapInterface = () => {
   const [toAmount, setToAmount] = useState('');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [customSlippage, setCustomSlippage] = useState('');
+  const quoteTimerRef = useRef(null);
+
+  // Inside the SwapInterface component, after the existing state variables
+  const [tokenSearchType, setTokenSearchType] = useState('');
+  const [isTokenSearchOpen, setIsTokenSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState([]);
+  const [isImporting, setIsImporting] = useState(false);
+  const [trendingCoins, setTrendingCoins] = useState([]);
+  const [activeTab, setActiveTab] = useState('swap');
+  const settingsModal = useDisclosure();
+  
+  // Fetch trending coins from CoinGecko
+  useEffect(() => {
+    const fetchTrendingCoins = async () => {
+      try {
+        // Get trending coins
+        const trendingResponse = await axios.get('https://api.coingecko.com/api/v3/search/trending');
+        
+        // Get price data for these coins (including 24h changes)
+        const coinIds = trendingResponse.data.coins.map(coin => coin.item.id).join(',');
+        const priceResponse = await axios.get(
+          `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=${coinIds}&price_change_percentage=24h`
+        );
+        
+        // Combine data - just take what we need for the compact display
+        const coinsWithPriceChange = priceResponse.data.map(coin => ({
+          id: coin.id,
+          symbol: coin.symbol,
+          name: coin.name,
+          image: coin.image,
+          priceChange24h: coin.price_change_percentage_24h || 0
+        }));
+        
+        setTrendingCoins(coinsWithPriceChange);
+      } catch (error) {
+        console.error('Error fetching trending coins:', error);
+        // Fallback to default coins if API fails
+        setTrendingCoins([
+          { id: 'bitcoin', symbol: 'btc', name: 'Bitcoin', priceChange24h: 2.5 },
+          { id: 'ethereum', symbol: 'eth', name: 'Ethereum', priceChange24h: 1.2 },
+          { id: 'binancecoin', symbol: 'bnb', name: 'BNB', priceChange24h: -0.8 },
+          { id: 'ripple', symbol: 'xrp', name: 'XRP', priceChange24h: -1.5 },
+          { id: 'cardano', symbol: 'ada', name: 'Cardano', priceChange24h: 3.1 }
+        ]);
+      }
+    };
+    
+    fetchTrendingCoins();
+    
+    // Refresh trending coins every 5 minutes
+    const intervalId = setInterval(fetchTrendingCoins, 5 * 60 * 1000);
+    return () => clearInterval(intervalId);
+  }, []);
 
   // Add formatTokenAmount function
   const formatTokenAmount = (amount, decimals, symbol) => {
-    // For tokens like BABYDOGE, show without decimal places
-    if (symbol === 'BABYDOGE') {
-      return ethers.utils.formatUnits(amount, decimals).split('.')[0];
+    // For tokens like BABYDOGE or tokens with many zeros, ensure proper display
+    try {
+      // Get the actual decimals for accurate display
+      const actualDecimals = parseInt(decimals);
+      
+      // Format differently based on token decimals
+      if (actualDecimals > 18) {
+        // For tokens with very large decimal places (unusual)
+        return ethers.utils.formatUnits(amount, actualDecimals);
+      } else if (actualDecimals > 8) {
+        // For normal tokens (like ETH/BNB with 18 decimals)
+        return parseFloat(ethers.utils.formatUnits(amount, actualDecimals)).toFixed(6);
+      } else if (actualDecimals <= 8 && actualDecimals > 2) {
+        // For tokens with fewer decimals like USDC (6 decimals)
+        return parseFloat(ethers.utils.formatUnits(amount, actualDecimals)).toFixed(actualDecimals);
+      } else {
+        // For tokens with very few decimals
+        return ethers.utils.formatUnits(amount, actualDecimals);
+      }
+    } catch (error) {
+      console.error('Error formatting token amount:', error);
+      // Default fallback with 18 decimals
+      return parseFloat(ethers.utils.formatUnits(amount, 18)).toFixed(6);
     }
-    // For other tokens, limit to 6 decimal places
-    return parseFloat(ethers.utils.formatUnits(amount, decimals)).toFixed(6);
+  };
+
+  // Add calculateFee function
+  const calculateFee = (amount) => {
+    // Convert 0.3% to 30 basis points as an integer
+    const feeMultiplier = 30; // FEE_PERCENTAGE (0.3) * 100 = 30 basis points
+    return ethers.BigNumber.from(amount)
+      .mul(feeMultiplier)
+      .div(10000); // Divide by 100 * 100 to get the percentage
   };
 
   // Add getAvailableTokens function
@@ -641,12 +737,22 @@ const SwapInterface = () => {
     }
   };
 
-  // Update getQuote function
-  const getQuote = async (isReverse = false) => {
-    if (!chain?.id || !signer || !address) {
+  // Wrap getQuote in useCallback to prevent dependency issues
+  const getQuote = useCallback(async (isReverse = false) => {
+    if (!chain?.id) {
       toast({
-        title: 'Error',
-        description: 'Please connect wallet',
+        title: 'Network Error',
+        description: 'Please select a supported network',
+        status: 'error',
+        duration: 3000,
+      });
+      return;
+    }
+
+    if (!provider) {
+      toast({
+        title: 'Provider Error',
+        description: 'Web3 provider not found',
         status: 'error',
         duration: 3000,
       });
@@ -655,6 +761,30 @@ const SwapInterface = () => {
 
     const inputToValidate = isReverse ? toAmount : amount;
     if (!inputToValidate || !fromTokenSymbol || !toTokenSymbol) return;
+
+    // Validate minimum input amount with better error handling
+    const numAmount = parseFloat(inputToValidate);
+    if (isNaN(numAmount)) {
+      toast({
+        title: 'Invalid amount',
+        description: 'Please enter a valid number',
+        status: 'warning',
+        duration: 3000,
+      });
+      return;
+    }
+
+    // Check minimum amount based on the chain
+    const minimumAmount = chain?.id === 56 ? 0.005 : 0.001;
+    if (numAmount < minimumAmount) {
+      toast({
+        title: 'Amount too small',
+        description: `Minimum amount required is ${minimumAmount} ${fromTokenSymbol}`,
+        status: 'warning',
+        duration: 3000,
+      });
+      return;
+    }
 
     try {
       setLoading(true);
@@ -788,7 +918,7 @@ const SwapInterface = () => {
 
       toast({
         title: 'Quote received',
-        description: `Expected output: ${ethers.utils.formatEther(amountOut)} ${toTokenSymbol}`,
+        description: `Expected output: ${formatTokenAmount(amountOut, getSafeTokenDecimals(chain?.id || 1, toTokenSymbol), toTokenSymbol)} ${toTokenSymbol}`,
         status: 'success',
         duration: 3000,
       });
@@ -803,7 +933,7 @@ const SwapInterface = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [chain, provider, amount, toAmount, fromTokenSymbol, toTokenSymbol, customTokens, toast, setLoading, setQuote, setReverseQuote, setIsReverseQuote, setAmount, setToAmount]);
 
   // Update handleSwap function
   const handleSwap = async () => {
@@ -859,20 +989,21 @@ const SwapInterface = () => {
         feeAmount = FIXED_FEES[chain.id];
       }
 
-      // Send fee
-      const feeTx = await signer.sendTransaction({
-        to: FEE_RECIPIENT,
-        value: feeAmount,
-        gasLimit: 21000
-      });
-
-      showToast('Fee Transaction Pending', 'View transaction details', 'info', feeTx.hash);
-      await feeTx.wait();
-      showToast('Fee Transaction Confirmed', 'View transaction details', 'success', feeTx.hash);
+      // Send fee - DISABLED as requested
+      // const feeTx = await signer.sendTransaction({
+      //   to: FEE_RECIPIENT,
+      //   value: feeAmount,
+      //   gasLimit: 21000
+      // });
+      //
+      // showToast('Fee Transaction Pending', 'View transaction details', 'info', feeTx.hash);
+      // await feeTx.wait();
+      // showToast('Fee Transaction Confirmed', 'View transaction details', 'success', feeTx.hash);
 
       let tx;
       if (chain.id === 8453) {
-        // Base chain V3 swap
+        // Base chain - use Uniswap V3
+        console.log("Using Uniswap on Base chain");
         const router = new ethers.Contract(routerAddress, network.v3RouterAbi, signer);
         
         // If token is not native ETH, approve first
@@ -880,8 +1011,10 @@ const SwapInterface = () => {
           const tokenContract = new ethers.Contract(fromTokenAddress, ERC20_ABI, signer);
           const allowance = await tokenContract.allowance(address, routerAddress);
           if (allowance.lt(amountIn)) {
-            const approveTx = await tokenContract.approve(routerAddress, amountIn);
+            const approveTx = await tokenContract.approve(routerAddress, ethers.constants.MaxUint256);
+            showToast('Approval Pending', 'View transaction details', 'info', approveTx.hash);
             await approveTx.wait();
+            showToast('Approval Confirmed', 'View transaction details', 'success', approveTx.hash);
           }
         }
 
@@ -910,9 +1043,142 @@ const SwapInterface = () => {
             gasLimit: 500000
           });
         }
+      } else if (chain.id === 56) {
+        // BSC chain - use PancakeSwap
+        console.log("Using PancakeSwap on BSC chain");
+        const pancakeRouter = new ethers.Contract(
+          network.v2Router, // PancakeSwap router
+          V2_ROUTER_ABI, // Using V2 Router ABI
+          signer
+        );
+        
+        // If token is not native BNB, approve first
+        if (!isNativeToken(chain.id, activeQuote.fromToken.symbol)) {
+          const tokenContract = new ethers.Contract(fromTokenAddress, ERC20_ABI, signer);
+          const allowance = await tokenContract.allowance(address, network.v2Router);
+          if (allowance.lt(amountIn)) {
+            const approveTx = await tokenContract.approve(network.v2Router, ethers.constants.MaxUint256);
+            showToast('Approval Pending', 'View transaction details', 'info', approveTx.hash);
+            await approveTx.wait();
+            showToast('Approval Confirmed', 'View transaction details', 'success', approveTx.hash);
+          }
+        }
+
+        const deadline = Math.floor(Date.now() / 1000) + 1800; // 30 minutes from now
+        
+        // Execute swap based on token types
+        try {
+          if (isNativeToken(chain.id, activeQuote.fromToken.symbol)) {
+            // Swapping from BNB to token
+            tx = await pancakeRouter.swapExactETHForTokens(
+              amountOutMin,
+              [wethAddress, toTokenAddress],
+              address,
+              deadline,
+              {
+                value: amountIn,
+                gasLimit: 500000
+              }
+            );
+          } else if (isNativeToken(chain.id, activeQuote.toToken.symbol)) {
+            // Swapping from token to BNB
+            tx = await pancakeRouter.swapExactTokensForETH(
+              amountIn,
+              amountOutMin,
+              [fromTokenAddress, wethAddress],
+              address,
+              deadline,
+              {
+                gasLimit: 500000
+              }
+            );
+          } else {
+            // Swapping between two tokens
+            tx = await pancakeRouter.swapExactTokensForTokens(
+              amountIn,
+              amountOutMin,
+              [fromTokenAddress, toTokenAddress],
+              address,
+              deadline,
+              {
+                gasLimit: 500000
+              }
+            );
+          }
+        } catch (error) {
+          console.error("PancakeSwap error:", error);
+          showToast('Error', `Swap failed: ${error.message}`, 'error');
+          throw error;
+        }
+      } else if (chain.id === 1) {
+        // Ethereum Mainnet - use Uniswap
+        console.log("Using Uniswap on Ethereum chain");
+        const uniswapRouter = new ethers.Contract(
+          network.v2Router, // Uniswap router
+          V2_ROUTER_ABI, // Using V2 Router ABI
+          signer
+        );
+        
+        // If token is not native ETH, approve first
+        if (!isNativeToken(chain.id, activeQuote.fromToken.symbol)) {
+          const tokenContract = new ethers.Contract(fromTokenAddress, ERC20_ABI, signer);
+          const allowance = await tokenContract.allowance(address, network.v2Router);
+          if (allowance.lt(amountIn)) {
+            const approveTx = await tokenContract.approve(network.v2Router, ethers.constants.MaxUint256);
+            showToast('Approval Pending', 'View transaction details', 'info', approveTx.hash);
+            await approveTx.wait();
+            showToast('Approval Confirmed', 'View transaction details', 'success', approveTx.hash);
+          }
+        }
+
+        const deadline = Math.floor(Date.now() / 1000) + 1800; // 30 minutes from now
+        
+        // Execute swap based on token types
+        try {
+          if (isNativeToken(chain.id, activeQuote.fromToken.symbol)) {
+            // Swapping from ETH to token
+            tx = await uniswapRouter.swapExactETHForTokens(
+              amountOutMin,
+              [wethAddress, toTokenAddress],
+              address,
+              deadline,
+              {
+                value: amountIn,
+                gasLimit: 500000
+              }
+            );
+          } else if (isNativeToken(chain.id, activeQuote.toToken.symbol)) {
+            // Swapping from token to ETH
+            tx = await uniswapRouter.swapExactTokensForETH(
+              amountIn,
+              amountOutMin,
+              [fromTokenAddress, wethAddress],
+              address,
+              deadline,
+              {
+                gasLimit: 500000
+              }
+            );
+          } else {
+            // Swapping between two tokens
+            tx = await uniswapRouter.swapExactTokensForTokens(
+              amountIn,
+              amountOutMin,
+              [fromTokenAddress, toTokenAddress],
+              address,
+              deadline,
+              {
+                gasLimit: 500000
+              }
+            );
+          }
+        } catch (error) {
+          console.error("Uniswap error:", error);
+          showToast('Error', `Swap failed: ${error.message}`, 'error');
+          throw error;
+        }
       } else {
-        // Handle other chains (BSC and Ethereum) as before
-        // ... existing code for other chains ...
+        throw new Error(`Unsupported network: ${chain.id}`);
       }
 
       showToast('Transaction Pending', 'View transaction details', 'info', tx.hash);
@@ -1335,7 +1601,7 @@ const SwapInterface = () => {
 
               {isSearching ? (
                 <Center py={4}>
-                  <Spinner color="white" />
+                  <Spinner color={brandColor} size="md" />
                 </Center>
               ) : foundTokenInfo ? (
                 <VStack spacing={4} align="stretch">
@@ -1556,11 +1822,27 @@ const SwapInterface = () => {
         throw new Error('Invalid token address');
       }
 
-      // Fetch token data from DexScreener first
-      const response = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${address}`, {
-        method: 'GET',
-        headers: {},
-      });
+      if (!provider) {
+        throw new Error('Web3 provider not found');
+      }
+
+      // First try to get basic token info
+      const tokenContract = new ethers.Contract(
+        address,
+        ['function symbol() view returns (string)', 'function name() view returns (string)', 'function decimals() view returns (uint8)'],
+        provider
+      );
+
+      // Use Promise.all to fetch token data in parallel
+      const [symbol, name, decimals] = await Promise.all([
+        tokenContract.symbol().catch(() => ''),
+        tokenContract.name().catch(() => ''),
+        tokenContract.decimals().catch(() => 18)
+      ]);
+
+      // If we couldn't get the symbol, try DexScreener
+      if (!symbol) {
+        const response = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${address}`);
       const data = await response.json();
 
       if (!data.pairs || data.pairs.length === 0) {
@@ -1572,56 +1854,33 @@ const SwapInterface = () => {
         ? tokenData.baseToken 
         : tokenData.quoteToken;
 
-      const imageUrl = tokenData.info?.imageUrl || null;
-      const priceUsd = tokenData.priceUsd;
-      const detectedChainId = getChainIdFromDexScreener(tokenData.chainId);
-
-      // If token is on a different chain, switch to it
-      if (detectedChainId !== chain?.id) {
-        if (switchNetwork) {
-          try {
-            await switchNetwork(detectedChainId);
-            toast({
-              title: 'Chain Switched',
-              description: `Switched to ${CHAIN_NAMES[detectedChainId]} for this token`,
-              status: 'success',
-              duration: 3000,
-              position: 'top-right'
-            });
-          } catch (error) {
-            console.error('Chain switch error:', error);
-            toast({
-              title: 'Chain Switch Failed',
-              description: `Please switch to ${CHAIN_NAMES[detectedChainId]} manually`,
-              status: 'warning',
-              duration: 5000,
-              position: 'top-right'
-            });
-          }
-        }
-      }
-
-      // Get decimals using the correct chain's provider
-      const rpcUrl = getChainRpcUrl(detectedChainId);
-      const provider = new ethers.providers.JsonRpcProvider(rpcUrl);
-      const tokenContract = new ethers.Contract(address, ERC20_ABI, provider);
-      const decimals = await tokenContract.decimals();
-
       setImportTokenInfo({
         address,
         symbol: tokenInfo.symbol,
         name: tokenInfo.name,
         decimals: decimals.toString(),
-        chainId: detectedChainId,
-        logo: imageUrl,
-        priceUsd: priceUsd
+          chainId: chain?.id,
+          logo: tokenData.info?.imageUrl,
+          priceUsd: tokenData.priceUsd
       });
+      } else {
+        // Use the data we got from the contract
+        setImportTokenInfo({
+          address,
+          symbol,
+          name,
+          decimals: decimals.toString(),
+          chainId: chain?.id,
+          logo: null,
+          priceUsd: null
+        });
+      }
 
     } catch (error) {
       console.error('Error validating token:', error);
       toast({
         title: 'Error validating token',
-        description: error.message,
+        description: error.message || 'Failed to validate token contract',
         status: 'error',
         duration: 3000,
       });
@@ -1682,7 +1941,7 @@ const SwapInterface = () => {
 
             {importLoading && (
               <HStack justify="center" py={4}>
-                <Spinner color="white" />
+                <Spinner color={brandColor} />
                 <Text color="white">Validating token...</Text>
               </HStack>
             )}
@@ -1745,79 +2004,115 @@ const SwapInterface = () => {
   // Replace the ChainSelect component with this updated version
   const ChainSelect = () => {
     const { chain } = useNetwork();
-    const { switchNetwork, isLoading } = useSwitchNetwork();
+    const { switchNetwork } = useSwitchNetwork();
     const [isOpen, setIsOpen] = useState(false);
+    const btnRef = useRef();
     const menuRef = useRef();
 
-    const chains = [
-      { id: 1, name: 'Ethereum' },
-      { id: 56, name: 'BSC' },
-      { id: 8453, name: 'Base' },
-      { id: 'solana', name: 'Solana', externalLink: 'https://solana.dogeswap.co' },
+    // Available networks - ONLY ETH, BSC, and Base
+    const availableNetworks = [
+      { id: 1, name: 'Ethereum', logo: ethLogo },
+      { id: 56, name: 'BNB Chain', logo: bscLogo },
+      { id: 8453, name: 'Base', logo: baseLogo }
     ];
 
-    // Handle click outside to close menu
     useEffect(() => {
       const handleClickOutside = (event) => {
-        if (menuRef.current && !menuRef.current.contains(event.target)) {
+        if (menuRef.current && !menuRef.current.contains(event.target) &&
+            btnRef.current && !btnRef.current.contains(event.target)) {
           setIsOpen(false);
         }
       };
 
       document.addEventListener('mousedown', handleClickOutside);
-      return () => document.removeEventListener('mousedown', handleClickOutside);
+      return () => {
+        document.removeEventListener('mousedown', handleClickOutside);
+      };
     }, []);
 
-    const handleChainClick = (chainId, externalLink) => {
-      if (externalLink) {
-        window.location.href = externalLink;
-        return;
-      }
-      switchNetwork?.(parseInt(chainId));
+    const handleChainClick = (chainId) => {
+      if (switchNetwork) {
+        switchNetwork(parseInt(chainId));
       setIsOpen(false);
+      }
+    };
+
+    // Get the correct chain logo and name
+    const getCurrentChainLogo = () => {
+      if (!chain) return ethLogo;
+      return CHAIN_LOGOS[chain.id] || ethLogo;
+    };
+
+    const getCurrentChainName = () => {
+      if (!chain) return 'Ethereum';
+      return CHAIN_NAMES[chain.id] || 'Ethereum';
     };
 
     return (
-      <Box position="relative" ref={menuRef}>
+      <Box position="relative" mr="2">
         <Button
+          ref={btnRef}
           onClick={() => setIsOpen(!isOpen)}
-          isDisabled={isLoading}
-          className="chain-switcher-button"
-          rightIcon={<Icon as={isOpen ? FaTimes : FaArrowDown} />}
+          size="sm"
+          bg="rgba(0, 0, 0, 0.3)"
+          _hover={{ bg: "rgba(0, 0, 0, 0.4)" }}
+          borderRadius="full"
+          p={2}
         >
           <HStack spacing={2}>
-            {chain && (
+            <Box w="24px" h="24px" borderRadius="full" overflow="hidden">
               <Image
-                src={CHAIN_LOGOS[chain.id]}
-                alt={CHAIN_NAMES[chain.id]}
-                width="24px"
-                height="24px"
+                src={getCurrentChainLogo()}
+                alt={getCurrentChainName()}
+                w="100%" 
+                h="100%" 
               />
-            )}
-            <Text>{chain ? CHAIN_NAMES[chain.id] : 'Select Chain'}</Text>
+            </Box>
+            <Text fontSize="sm" fontWeight="bold">
+              {getCurrentChainName()}
+            </Text>
+            <Icon as={FaChevronDown} fontSize="xs" />
           </HStack>
         </Button>
 
         {isOpen && (
-          <Box className="chain-switcher-menu">
-            <VStack align="stretch" spacing={1}>
-              {chains.map((c) => (
-                <Button
-                  key={c.id}
-                  onClick={() => handleChainClick(c.id, c.externalLink)}
-                  className="chain-switcher-option"
-                  variant="ghost"
+          <Box
+            ref={menuRef}
+            position="absolute"
+            top="100%" 
+            right="0"
+            mt={2} 
+            bg="#1B1C22"
+            borderRadius="md"
+            boxShadow="xl"
+            p={2}
+            zIndex={10}
+            minW="180px"
+          >
+            <VStack align="start" spacing={2}>
+              <Text fontSize="xs" color="gray.500" fontWeight="bold" px={2} py={1}>
+                Select Network
+              </Text>
+              <Box w="100%" h="1px" bg="gray.800" />
+
+              {/* Available Networks */}
+              {availableNetworks.map(network => (
+                <HStack
+                  key={network.id}
+                  w="100%"
+                  p={2}
+                  borderRadius="md"
+                  cursor="pointer"
+                  _hover={{ bg: "rgba(255, 255, 255, 0.1)" }}
+                  onClick={() => handleChainClick(network.id)}
+                  opacity={chain?.id === network.id ? 1 : 0.7}
+                  bg={chain?.id === network.id ? "rgba(255, 255, 255, 0.05)" : "transparent"}
                 >
-                  <HStack spacing={3} width="100%" justify="flex-start">
-                    <Image
-                      src={c.id === 'solana' ? solanaLogo : CHAIN_LOGOS[c.id]}
-                      alt={c.name}
-                      className="chain-logo"
-                    />
-                    <Text className="chain-name">{c.name}</Text>
-                    {c.externalLink && <Icon as={FaExternalLinkAlt} ml="auto" />}
+                  <Box w="24px" h="24px" borderRadius="full" overflow="hidden">
+                    <Image src={network.logo} alt={network.name} w="100%" h="100%" />
+                  </Box>
+                  <Text fontSize="sm" fontWeight="bold">{network.name}</Text>
                   </HStack>
-                </Button>
               ))}
             </VStack>
           </Box>
@@ -1832,8 +2127,6 @@ const SwapInterface = () => {
       const defaultTokens = {
         1: { from: 'ETH', to: 'USDT' },
         56: { from: 'BNB', to: 'BUSD' },
-        137: { from: 'MATIC', to: 'USDC' },
-        42161: { from: 'ETH', to: 'USDC' },
         8453: { from: 'ETH', to: 'SCI' },
       };
 
@@ -1842,92 +2135,187 @@ const SwapInterface = () => {
         setFromTokenSymbol(defaults.from);
         setToTokenSymbol(defaults.to);
       }
+      
+      // Show toast notification for chain change
+      toast({
+        title: `Connected to ${CHAIN_NAMES[chain.id] || 'Network'}`,
+        description: `You're now connected to ${CHAIN_NAMES[chain.id] || chain.name}`,
+        status: 'success',
+        duration: 3000,
+        position: 'bottom-right',
+        isClosable: true
+      });
     }
-  }, [chain?.id]);
+  }, [chain?.id, toast]);
 
-  // Update the top navigation bar section
+  // Update balances when chain changes
+  useEffect(() => {
+    if (chain?.id) {
+      // Use a setTimeout to ensure chain has fully switched
+      const timer = setTimeout(() => {
+        // Refresh token prices and liquidity
+        if (fromTokenSymbol && toTokenSymbol) {
+          getQuote();
+        }
+      }, 1000); // 1 second delay to ensure chain has switched
+      
+      return () => clearTimeout(timer);
+    }
+  }, [chain?.id, fromTokenSymbol, toTokenSymbol]);
+
+  // Update the TopNavBar function
   const TopNavBar = () => {
     return (
-      <Box 
-        position="fixed" 
-        top={0} 
-        left={0} 
-        right={0} 
-        p={4} 
-        zIndex={10}
-        // background="rgba(0, 0, 0, 0.5)"
-        backdropFilter="blur(10px)"
-        borderBottom="1px solid rgba(139, 0, 0, 0.2)"
-      >
-        <Container maxW="container.lg">
-          <HStack justify="space-between" align="center">
-            {/* Logo */}
+      <Flex justify="space-between" align="center" mb={4} zIndex="2" width="100%" px={0}>
+        {/* Logo on the far left */}
+        <Box>
+          <style jsx global>{`
+            @keyframes logoGlow {
+              0% { filter: drop-shadow(0 0 8px rgba(34, 197, 94, 0.6)); }
+              50% { filter: drop-shadow(0 0 18px rgba(34, 197, 94, 0.8)); }
+              100% { filter: drop-shadow(0 0 8px rgba(34, 197, 94, 0.6)); }
+            }
+            
+            @keyframes logoPulse {
+              0% { transform: scale(1); }
+              50% { transform: scale(1.05); }
+              100% { transform: scale(1); }
+            }
+            
+            .logo-image {
+              animation: logoGlow 3s infinite ease-in-out, logoPulse 3s infinite ease-in-out;
+              transition: transform 0.3s ease;
+            }
+            
+            .logo-image:hover {
+              transform: scale(1.1);
+              filter: drop-shadow(0 0 25px rgba(34, 197, 94, 1));
+            }
+            
+            /* Web3Button customization */
+            .custom-web3button-container {
+              position: relative;
+              transition: all 0.3s ease;
+              margin-right: 10px;
+            }
+            
+            .custom-web3button-container::before {
+              content: '';
+              position: absolute;
+              top: -3px;
+              left: -3px;
+              right: -3px;
+              bottom: -3px;
+              border-radius: 30px;
+              background: linear-gradient(45deg, #22c55e, #0ea5e9, #22c55e);
+              background-size: 200% auto;
+              z-index: -1;
+              animation: borderGlow 3s linear infinite;
+              opacity: 0.7;
+              filter: blur(5px);
+              transition: all 0.3s ease;
+            }
+            
+            .custom-web3button-container:hover::before {
+              animation: borderGlow 1.5s linear infinite;
+              filter: blur(3px);
+              opacity: 1;
+            }
+            
+            @keyframes borderGlow {
+              0% { background-position: 0% center; }
+              100% { background-position: 200% center; }
+            }
+          `}</style>
             <Image
               src={mainlogo}
-              alt="Logo"
-              height="40px"
-              objectFit="contain"
-            />
+            alt="ASANSWAP" 
+            height="80px" 
+            className="logo-image" 
+            mr={2} 
+          />
+        </Box>
 
-            {/* Right side button */}
+        {/* Chain select and wallet connect on the right */}
+        <Flex align="center">
+          <ChainSelect />
+          <Box className="custom-web3button-container" mr={2}>
+            <style global jsx>{`
+              /* Apply to the child elements of our custom container */
+              .custom-web3button-container > div,
+              .custom-web3button-container > div > button {
+                border-radius: 30px !important;
+              }
+              
+              /* This targets the actual Web3Modal button */
+              .custom-web3button-container w3m-button {
+                --w3m-accent-color: #22c55e !important;
+                --w3m-accent-fill-color: #22c55e !important;
+                --w3m-button-border-radius: 30px !important;
+                --w3m-container-border-radius: 30px !important;
+              }
+              
+              /* Override Web3Modal button styles */
+              .web3modal-button {
+                transform: scale(1.05) !important;
+                border-radius: 30px !important;
+                border: 2px solid rgba(34, 197, 94, 0.5) !important;
+                background-color: rgba(10, 10, 10, 0.7) !important;
+                backdrop-filter: blur(5px) !important;
+                color: #22c55e !important;
+                font-weight: bold !important;
+                letter-spacing: 0.5px !important;
+                transition: all 0.3s ease !important;
+                box-shadow: 0 0 15px rgba(34, 197, 94, 0.2) !important;
+              }
+              
+              .web3modal-button:hover {
+                transform: scale(1.08) translateY(-2px) !important;
+                border-color: rgba(34, 197, 94, 0.8) !important;
+                box-shadow: 0 0 20px rgba(34, 197, 94, 0.4) !important;
+                background-color: rgba(10, 10, 10, 0.8) !important;
+              }
+            `}</style>
             <Web3Button />
-          </HStack>
-        </Container>
       </Box>
+          <Button
+            onClick={settingsModal.onOpen}
+            size="sm"
+            variant="ghost"
+            colorScheme="gray"
+            borderRadius="full"
+          >
+            <Icon as={FaCog} />
+          </Button>
+        </Flex>
+      </Flex>
     );
   };
 
   // Update the Footer component
   const Footer = () => {
     return (
-      <VStack spacing={4} mt={8} mb={4} align="center">
-        {/* Social Links and Powered By in one row */}
-        <HStack 
-          spacing={4} 
-          justify="center" 
-          align="center"
-          py={2}
-          px={4}
-          background="rgba(0, 0, 0, 0.3)"
-          borderRadius="full"
-          backdropFilter="blur(10px)"
-        >
-          {/* Social Icons */}
-          <HStack spacing={3} className="social-icons">
-            <Link href="https://twitter.com/dogeswap_" isExternal><Icon as={FaTwitter} color="orange" boxSize={5} /></Link>
-            <Link href="https://t.me/DogeSwap_Ann" isExternal><Icon as={FaTelegram} color="orange" boxSize={5} /></Link>
-            <Link href="https://t.me/DogeSwap_Chat" isExternal><Icon as={FaTelegram} color="orange" boxSize={5} /></Link>
-            <Link href="https://instagram.com/dogeswap_" isExternal><Icon as={FaInstagram} color="orange" boxSize={5} /></Link>
-            <Link href="https://tiktok.com/@dogeswap_" isExternal><Icon as={FaTiktok} color="orange" boxSize={5} /></Link>
-          </HStack>
-
-          {/* Vertical Divider */}
-          <Box height="20px" width="1px" bg="rgba(255, 255, 255, 0.2)" mx={2} />
-
-          {/* Powered By Image */}
-          <Image 
-            src={poweredby}
-            alt="Powered by Dogecoin"
-            height="30px"
-            objectFit="contain"
-            className="powered-by-logo"
-          />
-        </HStack>
-
-        {/* Supported By Section */}
-        <Box textAlign="center">
-          <Text color="white" mb={3}>SUPPORTED BY</Text>
-          <HStack spacing={6} justify="center" flexWrap="wrap" className="supported-chains">
-            <Image src={ethLogo} alt="Ethereum" height="32px" />
-            <Image src={bscLogo} alt="Base" height="32px" />
-            <Image src={baseLogo} alt="Base" height="32px" />
-            <Image src={arbitrumLogo} alt="Base" height="32px" />
-            <Image src={lineaLogo} alt="Base" height="32px" />
-            <Image src={polygonLogo} alt="Base" height="32px" />
-            <Image src={solanaLogo} alt="Base" height="32px" />
-          </HStack>
-        </Box>
-      </VStack>
+      <Flex direction="column" align="center" mt={8} mb={4} zIndex="1">
+        <Flex mb={4} gap={4}>
+          <Link href="https://twitter.com/" isExternal>
+            <Icon as={FaTwitter} boxSize="20px" color="gray.500" _hover={{ color: "gray.300" }} />
+          </Link>
+          <Link href="https://t.me/" isExternal>
+            <Icon as={FaTelegram} boxSize="20px" color="gray.500" _hover={{ color: "gray.300" }} />
+          </Link>
+          <Link href="https://instagram.com/" isExternal>
+            <Icon as={FaInstagram} boxSize="20px" color="gray.500" _hover={{ color: "gray.300" }} />
+          </Link>
+          <Link href="https://tiktok.com/" isExternal>
+            <Icon as={FaTiktok} boxSize="20px" color="gray.500" _hover={{ color: "gray.300" }} />
+          </Link>
+          <Link href="https://asanswap.com/" isExternal>
+            <Icon as={FaGlobe} boxSize="20px" color="gray.500" _hover={{ color: "gray.300" }} />
+          </Link>
+        </Flex>
+        <Text color="gray.500" fontSize="sm">© 2023 ASANSWAP. All rights reserved.</Text>
+        <Image src={poweredby} alt="Powered by" height="24px" mt={3} />
+      </Flex>
     );
   };
 
@@ -2108,7 +2496,8 @@ const SwapInterface = () => {
     }
   };
 
-  // Add token search and import modal component
+  // Update the TokenSearchModal styling
+
   const TokenSearchModal = ({ isOpen, onClose, onSelect, type }) => {
     const [searchQuery, setSearchQuery] = useState('');
     const [searchResults, setSearchResults] = useState([]);
@@ -2122,7 +2511,7 @@ const SwapInterface = () => {
         setIsImporting(true);
         try {
           const tokenInfo = await importToken(query, chain.id);
-          setSearchResults([tokenInfo]);
+          setSearchResults([tokenInfo.symbol]);
         } catch (error) {
           toast({
             title: 'Error importing token',
@@ -2138,62 +2527,96 @@ const SwapInterface = () => {
         const filtered = tokens.filter(token => 
           token.toLowerCase().includes(query.toLowerCase())
         );
-        setSearchResults(filtered);
+        setSearchResults(filtered.length > 0 ? filtered : tokens);
       }
     };
 
+    // Initialize search results with all available tokens
+    useEffect(() => {
+      if (isOpen) {
+        setSearchResults(getAvailableTokens());
+      }
+    }, [isOpen]);
+
     return (
-      <Modal isOpen={isOpen} onClose={onClose}>
-        <ModalOverlay />
-        <ModalContent>
-          <ModalHeader>Select Token</ModalHeader>
-          <ModalCloseButton />
-          <ModalBody>
+      <VStack align="stretch" spacing={3}>
             <Input
               placeholder="Search by name or paste address"
               value={searchQuery}
               onChange={(e) => handleSearch(e.target.value)}
-              mb={4}
+          bg="rgba(0, 0, 0, 0.2)"
+          border="1px solid"
+          borderColor="brand.cardborder"
+          color="white"
+          _placeholder={{ color: 'gray.500' }}
             />
             {isImporting ? (
-              <Spinner />
+          <Center py={4}>
+            <Spinner color={brandColor} size="md" />
+          </Center>
             ) : (
-              <VStack align="stretch" spacing={2}>
+          <Box maxH="300px" overflowY="auto">
                 {searchResults.map((token) => {
-                  const tokenInfo = TOKEN_INFO[chain.id]?.[token] || customTokens[chain.id]?.[token];
+              const tokenInfo = getTokenInfo(token, chain?.id);
                   return (
                     <HStack
                       key={token}
-                      p={2}
+                  py={2}
+                  px={3}
+                  borderRadius="md"
                       cursor="pointer"
-                      _hover={{ bg: 'gray.100' }}
+                  _hover={{ bg: 'rgba(0, 0, 0, 0.2)' }}
                       onClick={() => {
                         onSelect(token);
                         onClose();
                       }}
                     >
+                  <Box w="32px" h="32px" borderRadius="full" bg="blue.400" overflow="hidden">
                       {tokenInfo?.logo && (
                         <Image
                           src={tokenInfo.logo}
                           alt={token}
-                          boxSize="24px"
+                        boxSize="32px"
                           borderRadius="full"
                         />
                       )}
-                      <Text>{token}</Text>
+                  </Box>
+                  <VStack spacing={0} align="start">
+                    <Text fontWeight="bold" color="white">{token}</Text>
                       {tokenInfo?.name && (
-                        <Text color="gray.500" fontSize="sm">
+                      <Text fontSize="xs" color="gray.400">
                           {tokenInfo.name}
                         </Text>
                       )}
+                  </VStack>
                     </HStack>
                   );
                 })}
+            
+            {searchResults.length === 0 && (
+              <Box py={4} textAlign="center">
+                {searchQuery ? (
+                  <VStack>
+                    <Text color="gray.400">No results found</Text>
+                    {ethers.utils.isAddress(searchQuery) && (
+                      <Button
+                        colorScheme="green"
+                        size="sm"
+                        onClick={() => importToken(searchQuery, chain?.id)}
+                        isLoading={isImporting}
+                      >
+                        Import Token
+                      </Button>
+                    )}
               </VStack>
+                ) : (
+                  <Text color="gray.400">No tokens found</Text>
             )}
-          </ModalBody>
-        </ModalContent>
-      </Modal>
+              </Box>
+            )}
+          </Box>
+        )}
+      </VStack>
     );
   };
 
@@ -2383,7 +2806,7 @@ const SwapInterface = () => {
     handleUrlParameters();
   }, [chain?.id, searchParams, provider, getTokenSymbolFromAddress]);
 
-  // Update the showToast function
+  // Update the toast function to force it to the far right
   const showToast = (title, description, status, txHash = null) => {
     const getExplorerLink = (hash) => {
       if (!chain?.id || !hash) return null;
@@ -2398,54 +2821,26 @@ const SwapInterface = () => {
     const explorerLink = txHash ? getExplorerLink(txHash) : null;
 
     return toast({
-      render: ({ onClose }) => (
-        <Box
-          p={4}
-          bg={
-            status === 'error' ? 'linear-gradient(135deg, #FF4B4B 0%, #9B0000 100%)' :
-            status === 'success' ? 'linear-gradient(135deg, #48BB78 0%, #2F855A 100%)' :
-            status === 'info' ? 'linear-gradient(135deg, #4299E1 0%, #2B6CB0 100%)' :
-            'linear-gradient(135deg, #ED8936 0%, #C05621 100%)'
-          }
-          borderRadius="xl"
-          boxShadow="0 4px 12px rgba(0, 0, 0, 0.15)"
-          color="white"
-          onClick={onClose}
-          cursor="pointer"
-          position="relative"
-          _hover={{ opacity: 0.9 }}
-          transition="all 0.2s"
-        >
-          <VStack align="flex-start" spacing={1}>
-            <Text fontWeight="bold" fontSize="md">
-              {title}
-            </Text>
-            {explorerLink ? (
+      title,
+      description: explorerLink ? (
               <Link 
                 href={explorerLink} 
                 isExternal 
                 color="white" 
                 textDecoration="underline"
-                onClick={(e) => e.stopPropagation()}
               >
                 {description} <Icon as={FaExternalLinkAlt} mx="2px" />
               </Link>
-            ) : (
-              <Text fontSize="sm">{description}</Text>
-            )}
-          </VStack>
-        </Box>
-      ),
+      ) : description,
+      status,
       duration: 5000,
       isClosable: true,
-      position: 'bottom-right',
+      position: "bottom-right",
+      variant: "solid",
       containerStyle: {
-        marginBottom: '20px',
-        marginRight: '20px',
-        maxWidth: '380px'
-      },
-      onCloseComplete: () => {
-        // Clean up any resources if needed
+        marginBottom: "4rem",
+        marginRight: "1rem",
+        zIndex: 9999
       }
     });
   };
@@ -2479,141 +2874,590 @@ const SwapInterface = () => {
     }
   }, [address]);
 
-  return (
-    <Box className="min-h-screen relative">
-      {/* Video Background */}
-      <video
-        autoPlay
-        muted
-        loop
-        playsInline
-        className="video-background"
+  // Update the handleAmountChange function to be smarter with validation
+  const handleAmountChange = (e) => {
+    const value = e.target.value;
+    setAmount(value);
+    
+    // Clear any existing timer
+    if (quoteTimerRef.current) {
+      clearTimeout(quoteTimerRef.current);
+      quoteTimerRef.current = null;
+    }
+    
+    // Don't automatically get the quote if the value is empty or invalid
+    if (!value || isNaN(parseFloat(value))) {
+      setQuote(null);
+      setReverseQuote(null);
+      return;
+    }
+    
+    // Check if we have the necessary tokens selected
+    if (!fromTokenSymbol || !toTokenSymbol) {
+      return;
+    }
+    
+    // Get the minimum amount based on the chain
+    const minAmount = chain?.id === 56 ? 0.005 : 0.001;
+    const numValue = parseFloat(value);
+    
+    // Set a timer to get quote after user stops typing
+    quoteTimerRef.current = setTimeout(() => {
+      if (numValue >= minAmount) {
+        setLoading(true);
+        getQuote(false);
+      } else {
+        // Clear quotes if amount is too small
+        setQuote(null);
+        setReverseQuote(null);
+        
+        // Show warning only if the amount is non-zero but too small
+        if (numValue > 0) {
+          toast({
+            title: 'Amount too small',
+            description: `Minimum amount required is ${minAmount} ${fromTokenSymbol}`,
+            status: 'warning',
+            duration: 3000,
+          });
+        }
+      }
+    }, 2000);
+  };
+
+  const handleTokenSearchOpen = (type) => {
+    setTokenSearchType(type);
+    setIsTokenSearchOpen(true);
+    // Reset search results to show all available tokens
+    setSearchResults(getAvailableTokens());
+    setSearchQuery('');
+  };
+
+  const handleTokenSearchClose = () => {
+    setIsTokenSearchOpen(false);
+  };
+
+  // Add these helper functions
+
+  // Helper function to get token info from either built-in or custom tokens
+  const getTokenInfo = (symbol, chainId) => {
+    if (!symbol || !chainId) return null;
+    
+    // Check custom tokens first
+    if (customTokens[chainId]?.[symbol]) {
+      return customTokens[chainId][symbol];
+    }
+    
+    // Then check built-in tokens
+    if (TOKEN_INFO[chainId]?.[symbol]) {
+      return TOKEN_INFO[chainId][symbol];
+    }
+    
+    return null;
+  };
+
+  // Helper function to safely get token decimals
+  const getSafeTokenDecimals = (chainId, symbol) => {
+    // Default decimals for most tokens
+    const DEFAULT_DECIMALS = 18;
+    
+    if (!chainId || !symbol) return DEFAULT_DECIMALS;
+    
+    try {
+      const tokenInfo = getTokenInfo(symbol, chainId);
+      if (tokenInfo?.decimals) {
+        return parseInt(tokenInfo.decimals);
+      }
+      
+      return getTokenDecimals(chainId, symbol) || DEFAULT_DECIMALS;
+    } catch (error) {
+      console.error('Error getting token decimals:', error);
+      return DEFAULT_DECIMALS;
+    }
+  };
+
+  // Clear quote timer on unmount
+  useEffect(() => {
+    return () => {
+      if (quoteTimerRef.current) {
+        clearTimeout(quoteTimerRef.current);
+      }
+    };
+  }, []);
+
+  // Update the CompactTrendingBar to display as a single horizontal row
+  const CompactTrendingBar = () => {
+    return (
+      <Box 
+        w="100%" 
+        bg="rgba(17, 17, 17, 0.8)" 
+        borderRadius="lg"
+        py={2}
+        px={3}
+        mb={5}
+        overflowX="auto"
+        whiteSpace="nowrap"
+        css={{
+          '&::-webkit-scrollbar': { height: '0px' }
+        }}
+        position="relative"
+        zIndex="1"
+        boxShadow="0 4px 20px rgba(0, 0, 0, 0.25)"
+        backdropFilter="blur(5px)"
       >
-        <source src="https://dogecoin.com/assets/images/Header_Video.mp4" type="video/mp4" />
-      </video>
-
-      {/* Sun Shine Effect */}
-      <div className="sun-shine" />
-
-      {/* Top Navigation Bar */}
-      <TopNavBar />
-
-      {/* Main Swap Interface */}
-      <VStack spacing={8} align="stretch" width="100%" maxW="480px" mx="auto" p={4} mt="100px">
-        <Box 
-          className="token-modal"
-          p={6}
-        >
-          <HStack justify="space-between" align="center" mb={6}>
-            <Text fontSize="xl" fontWeight="bold" color="white">Swap</Text>
-            <HStack spacing={4}>
-              <Button
-                onClick={() => setIsSettingsOpen(true)}
-                className="chain-switcher-button"
-                width="auto"
-                px={3}
-              >
-                <Icon as={FaCog} color="white" />
-              </Button>
-              <ChainSelect />
-            </HStack>
-          </HStack>
+        <style jsx global>{`
+          @keyframes gradientFlow {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+          }
           
-          {/* From Token Section */}
-          <TokenSelect
-            value={fromTokenSymbol}
-            onChange={setFromTokenSymbol}
-            tokens={getAvailableTokens()}
-            label="From"
-            isDisabled={!chain || isSwitchingChain}
-          />
+          @keyframes pulsateIcon {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.2); }
+            100% { transform: scale(1); }
+          }
+          
+          .trending-badge {
+            background: linear-gradient(90deg, #FF6B00, #FF9500, #FF6B00);
+            background-size: 200% auto;
+            animation: gradientFlow 3s ease infinite;
+            box-shadow: 0 0 10px rgba(255, 107, 0, 0.6);
+            transition: all 0.3s ease;
+          }
+          
+          .trending-badge:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 0 15px rgba(255, 107, 0, 0.8);
+          }
+          
+          .trending-icon {
+            animation: pulsateIcon 1.5s ease-in-out infinite;
+          }
+          
+          .coin-item {
+            transition: all 0.3s ease;
+          }
+          
+          .coin-item:hover {
+            transform: translateY(-3px);
+          }
+          
+          .coin-image {
+            transition: all 0.3s ease;
+          }
+          
+          .coin-item:hover .coin-image {
+            transform: scale(1.15);
+            filter: drop-shadow(0 0 5px rgba(255, 255, 255, 0.7));
+          }
+          
+          .positive-price {
+            color: #22c55e;
+            text-shadow: 0 0 8px rgba(34, 197, 94, 0.5);
+          }
+          
+          .negative-price {
+            color: #ef4444;
+            text-shadow: 0 0 8px rgba(239, 68, 68, 0.5);
+          }
+        `}</style>
+        
+        <Flex align="center" justify="flex-start" width="100%" overflowX="auto">
+          <Flex 
+            align="center" 
+            className="trending-badge" 
+            borderRadius="md" 
+            color="white" 
+            py={1.5} 
+                px={3}
+            mr={4}
+            fontWeight="bold"
+            flexShrink={0}
+              >
+            <Icon as={FaFire} mr={1.5} className="trending-icon" />
+            <Text fontWeight="extrabold" fontSize="sm">Trending</Text>
+          </Flex>
+          
+          <Flex align="center" flexWrap="nowrap" width="100%" overflowX="auto" paddingRight={2}>
+            {trendingCoins.map((coin, index) => (
+              <Flex 
+                key={coin.id} 
+                align="center" 
+                mr={4} 
+                className="coin-item"
+                cursor="pointer"
+                flexShrink={0}
+              >
+                <Text 
+                  color={index === 0 ? "yellow.400" : "gray.500"} 
+                  fontSize="sm" 
+                  mr={1.5} 
+                  fontWeight="bold"
+                >
+                  #{index + 1}
+                </Text>
+                <Box 
+                  position="relative" 
+                  mr={1.5}
+                >
+                  <Image 
+                    src={coin.image} 
+                    alt={coin.name} 
+                    boxSize="22px" 
+                    borderRadius="full"
+                    className="coin-image"
+                    border="1px solid rgba(255,255,255,0.2)"
+                  />
+                  {index < 3 && (
+                    <Box 
+                      position="absolute" 
+                      top="-3px" 
+                      right="-3px" 
+                      boxSize="8px" 
+                      borderRadius="full" 
+                      bg={index === 0 ? "yellow.400" : index === 1 ? "gray.400" : "#CD7F32"} 
+                      boxShadow={`0 0 5px ${index === 0 ? "yellow" : index === 1 ? "silver" : "#CD7F32"}`}
+                    />
+                  )}
+          </Box>
+                <Text 
+                  fontWeight="extrabold" 
+                  fontSize="sm" 
+                  textTransform="uppercase"
+                  className={coin.priceChange24h >= 0 ? "positive-price" : "negative-price"}
+                  letterSpacing="wide"
+                >
+                  {coin.symbol}
+                  <Text as="span" fontSize="xs" ml={1} fontWeight="normal">
+                    {coin.priceChange24h >= 0 ? "+" : ""}{coin.priceChange24h.toFixed(1)}%
+                  </Text>
+                </Text>
+              </Flex>
+            ))}
+          </Flex>
+        </Flex>
+      </Box>
+    );
+  };
 
-          {/* Swap Arrow Button */}
-          <Box className="swap-arrow-container" onClick={handleSwapTokens}>
-            <FaArrowDown />
+  return (
+    <>
+      {/* Background Animation */}
+      <Box 
+        position="fixed" 
+        top="0" 
+        left="0" 
+        right="0" 
+        bottom="0" 
+        overflow="hidden" 
+        zIndex="0"
+        pointerEvents="none"
+        opacity="0.5"
+      >
+        <style jsx global>{`
+          @keyframes float {
+            0% { transform: translateY(100vh) rotate(0deg); opacity: 0.3; }
+            15% { opacity: 0.8; }
+            85% { opacity: 0.8; }
+            100% { transform: translateY(-150px) rotate(360deg); opacity: 0; }
+          }
+          
+          @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+            100% { transform: scale(1); }
+          }
+          
+          .coin {
+            position: absolute;
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            z-index: 0;
+            animation: float 15s linear infinite;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+          }
+          
+          .coin-img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+          }
+          
+          .price-change {
+            position: absolute;
+            bottom: -20px;
+            background: rgba(0,0,0,0.7);
+            color: white;
+            padding: 2px 4px;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: bold;
+          }
+          
+          .up { color: #00c853; }
+          .down { color: #ff3d00; }
+          
+          .pulse {
+            animation: pulse 3s ease-in-out infinite;
+          }
+        `}</style>
+        
+        {/* Generate animated coins */}
+        {trendingCoins.length > 0 && [...Array(60)].map((_, i) => {
+          const size = 40 + Math.random() * 60;
+          const left = Math.random() * 100;
+          const delay = Math.random() * 30;
+          const duration = 10 + Math.random() * 25;
+          const shouldPulse = Math.random() > 0.7;
+          
+          const coin = trendingCoins[i % trendingCoins.length]; 
+          const priceChangeClass = coin.priceChange24h >= 0 ? 'up' : 'down';
+          const priceChangeText = coin.priceChange24h.toFixed(1) + '%';
+          
+          return (
+            <Box
+              key={i}
+              className={`coin ${shouldPulse ? 'pulse' : ''}`}
+              style={{
+                left: `${left}%`,
+                bottom: `-${size}px`,
+                width: `${size}px`,
+                height: `${size}px`,
+                animationDuration: `${duration}s`,
+                animationDelay: `${delay}s`,
+                boxShadow: `0 0 30px ${coin.priceChange24h >= 0 ? '#00c853' : '#ff3d00'}`
+              }}
+            >
+              <img 
+                src={coin.image} 
+                alt={coin.name} 
+                className="coin-img"
+              />
+              <span className={`price-change ${priceChangeClass}`}>
+                {priceChangeText}
+              </span>
+            </Box>
+          );
+        })}
+      </Box>
+
+      {/* Main swap container - all contents need z-index to stay above animation */}
+      <Box width="100%" maxW="450px" mx="auto">
+        <Flex direction="column" className="swap-container" position="relative" zIndex="1" 
+          bg="rgba(17, 17, 17, 0.7)"
+          backdropFilter="blur(10px)"
+          borderRadius="xl"
+          border="1px solid rgba(255, 255, 255, 0.05)"
+              p={4} 
+          boxShadow="0 4px 30px rgba(0, 0, 0, 0.3)"
+            >
+          {/* Top NavBar */}
+          <TopNavBar />
+          
+          {/* Trending Bar */}
+          {trendingCoins.length > 0 && <CompactTrendingBar />}
+          
+          {/* Remove the tabs and just have the market trading interface */}
+
+
+          {/* You Sell Section */}
+          <Box bg="#1B1C22" borderRadius="xl" p={4} mb={3} zIndex="1" position="relative">
+            <Text fontSize="sm" color="gray.400" mb={1}>
+              You Sell
+                  </Text>
+            <Flex justify="space-between" align="center" mb={2}>
+              <Input
+                variant="unstyled"
+                placeholder="0"
+                value={amount}
+                onChange={handleAmountChange}
+                fontSize="2xl"
+                fontWeight="bold"
+                className="token-input"
+                w="60%"
+              />
+              <Flex 
+                align="center" 
+                bg="rgba(0, 0, 0, 0.3)" 
+                borderRadius="md" 
+                px={3} 
+                py={2}
+                cursor="pointer"
+                onClick={() => handleTokenSearchOpen('from')}
+              >
+                <Box w="24px" h="24px" borderRadius="full" overflow="hidden">
+                  <Image
+                    src={getTokenInfo(fromTokenSymbol, chain?.id || 1)?.logo || ethLogo} 
+                    alt={fromTokenSymbol || 'ETH'} 
+                    w="100%" 
+                    h="100%" 
+                  />
+                </Box>
+                <Text fontWeight="bold" mr={2}>{fromTokenSymbol || 'ETH'}</Text>
+                <Icon as={FaChevronDown} color="gray.500" />
+              </Flex>
+            </Flex>
+            <Flex justify="space-between" align="center">
+              <Text fontSize="sm" color="gray.500">
+                {getTokenInfo(fromTokenSymbol, chain?.id || 1)?.name || fromTokenSymbol}
+              </Text>
+              <Text fontSize="sm" color="gray.500">
+                Balance: {fromTokenBalance}
+              </Text>
+            </Flex>
           </Box>
 
-          {/* To Token Section */}
-          <TokenSelect
-            value={toTokenSymbol}
-            onChange={setToTokenSymbol}
-            tokens={getAvailableTokens().filter(t => t !== fromTokenSymbol)}
-            label="To"
-            isDisabled={!chain || isSwitchingChain}
-          />
-
-          {/* Action Button */}
-          <Button
-            className="swap-button"
-            onClick={(quote || reverseQuote) ? handleSwap : isReverseQuote ? () => getQuote(true) : () => getQuote(false)}
-            isLoading={loading}
-            loadingText={quote || reverseQuote ? "Swapping" : "Getting Quote"}
-            isDisabled={
-              !fromTokenSymbol || 
-              !toTokenSymbol || 
-              (!amount && !toAmount) || 
-              isSwitchingChain || 
-              loading
-            }
-            width="100%"
-          >
-            {quote || reverseQuote ? 'Swap' : 'Get Quote'}
-          </Button>
-
-          {/* Quote Details */}
-          {(quote || reverseQuote) && (
+          {/* Arrow Button */}
+          <Center position="relative" my={-3} zIndex={2}>
             <Box 
-              mt={4} 
-              p={4} 
-              className="token-modal"
+              as="button" 
+              p={2} 
+              borderRadius="full" 
+              bg="#2A2C33" 
+              border="4px solid #121212"
+              onClick={handleSwapTokens}
             >
-              <VStack align="stretch" spacing={2}>
-                <HStack justify="space-between">
-                  <Text color="white">{isReverseQuote ? 'Required Input:' : 'Expected Output:'}</Text>
-                  <Text color="white" fontWeight="bold">
-                    {isReverseQuote 
-                      ? `${formatTokenAmount(reverseQuote.fromTokenAmount, getTokenDecimals(chain.id, fromTokenSymbol), fromTokenSymbol)} ${fromTokenSymbol}`
-                      : `${formatTokenAmount(quote.toTokenAmount, getTokenDecimals(chain.id, toTokenSymbol), toTokenSymbol)} ${toTokenSymbol}`
-                    }
+              <Icon as={FaArrowDown} color="white" />
+            </Box>
+          </Center>
+
+          {/* You Buy Section */}
+          <Box bg="#1B1C22" borderRadius="xl" p={4} mb={4} zIndex="1" position="relative">
+            <Text fontSize="sm" color="gray.400" mb={1}>
+              You Buy
                   </Text>
-                </HStack>
-                <HStack justify="space-between">
-                  <Text color="gray.400" fontSize="sm">Network Fee:</Text>
-                  <Text color="gray.400" fontSize="sm">
-                    {(() => {
-                      const activeQuote = isReverseQuote ? reverseQuote : quote;
-                      const isFromNative = isNativeToken(chain?.id, activeQuote?.fromToken.symbol);
-                      const isToNative = isNativeToken(chain?.id, activeQuote?.toToken.symbol);
-                      
-                      if (isFromNative) {
-                        const feeAmount = ethers.BigNumber.from(activeQuote.fromTokenAmount).mul(300).div(100000);
-                        return `${formatTokenAmount(feeAmount, 18, activeQuote.fromToken.symbol)} ${activeQuote.fromToken.symbol} (0.3%)`;
-                      } else if (isToNative) {
-                        const feeAmount = ethers.BigNumber.from(activeQuote.toTokenAmount).mul(300).div(100000);
-                        return `${formatTokenAmount(feeAmount, 18, activeQuote.toToken.symbol)} ${activeQuote.toToken.symbol} (0.3%)`;
-                      } else {
-                        return chain?.id === 56 ? '0.001 BNB' : '0.00015 ETH';
-                      }
-                    })()}
+            <Flex justify="space-between" align="center" mb={2}>
+              <Text
+                fontSize="2xl"
+                fontWeight="bold"
+                className="token-input"
+                w="60%"
+              >
+                {quote ? formatTokenAmount(
+                  quote.toTokenAmount,
+                  getSafeTokenDecimals(chain?.id || 1, toTokenSymbol),
+                  toTokenSymbol
+                ) : '0'}
                   </Text>
-                </HStack>
-                <HStack justify="space-between">
-                  <Text color="gray.400" fontSize="sm">DEX:</Text>
-                  <Text color="gray.400" fontSize="sm">
-                    {isReverseQuote ? reverseQuote.dexName : quote.dexName}
-                  </Text>
-                </HStack>
-              </VStack>
+              <Flex
+                align="center" 
+                bg="rgba(0, 0, 0, 0.3)"
+                borderRadius="md" 
+                px={3} 
+                py={2}
+                cursor="pointer"
+                onClick={() => handleTokenSearchOpen('to')}
+              >
+                <Box w="24px" h="24px" borderRadius="full" overflow="hidden">
+                  <Image
+                    src={getTokenInfo(toTokenSymbol, chain?.id || 1)?.logo || baseLogo} 
+                    alt={toTokenSymbol || 'USDT'} 
+                    w="100%" 
+                    h="100%" 
+                  />
+            </Box>
+                <Text fontWeight="bold" mr={2}>{toTokenSymbol || 'USDT'}</Text>
+                <Icon as={FaChevronDown} color="gray.500" />
+              </Flex>
+            </Flex>
+            <Flex justify="space-between" align="center">
+              <Text fontSize="sm" color="gray.500">
+                {getTokenInfo(toTokenSymbol, chain?.id || 1)?.name || toTokenSymbol}
+              </Text>
+              <Text fontSize="sm" color="gray.500">
+                Balance: {toTokenBalance}
+              </Text>
+            </Flex>
+        </Box>
+
+          {/* Connect Wallet Button or Swap Button */}
+          {address ? (
+            <Button
+              w="100%"
+              py={6}
+              bg="#22c55e"
+              color="white"
+              _hover={{ bg: "#1ea550", opacity: 0.9 }}
+              _active={{ bg: "#1ea550", opacity: 0.8 }}
+              onClick={quote || reverseQuote ? handleSwap : () => getQuote(false)}
+              isLoading={loading}
+              borderRadius="lg"
+              fontSize="lg"
+              fontWeight="bold"
+              id="swap-button"
+              zIndex="1"
+              position="relative"
+            >
+              {quote || reverseQuote ? 'Swap' : 'Get Quote'}
+            </Button>
+          ) : (
+            <Box position="relative" zIndex="1">
+              <Web3Button 
+                icon="show"
+                label="Connect Wallet"
+                balance="hide"
+                style={{
+                  width: '100%',
+                  padding: '1.5rem 0',
+                  borderRadius: '0.5rem',
+                  backgroundColor: '#22c55e',
+                  fontFamily: 'inherit',
+                  fontWeight: 'bold',
+                  textTransform: 'none',
+                  fontSize: '1.25rem',
+                }}
+              />
             </Box>
           )}
-        </Box>
-      </VStack>
 
-      {/* Footer with social links and supported by section */}
+          {/* Footer with social links */}
       <Footer />
 
+          {/* Token Search Modal */}
+          <Modal isOpen={isTokenSearchOpen} onClose={handleTokenSearchClose}>
+            <ModalOverlay />
+            <ModalContent bg="#1B1C22" borderColor="gray.700" borderWidth="1px">
+              <ModalHeader color="white">Select a Token</ModalHeader>
+              <ModalCloseButton color="white" />
+              <ModalBody>
+                <TokenSearchModal 
+                  isOpen={isTokenSearchOpen}
+                  onClose={handleTokenSearchClose}
+                  onSelect={(token) => {
+                    if (tokenSearchType === 'from') {
+                      setFromTokenSymbol(token);
+                    } else {
+                      setToTokenSymbol(token);
+                    }
+                    handleTokenSearchClose();
+                    if (amount && fromTokenSymbol && toTokenSymbol) {
+                      getQuote(false);
+                    }
+                  }}
+                  type={tokenSearchType}
+                />
+              </ModalBody>
+            </ModalContent>
+          </Modal>
+
+          {/* Settings Modal */}
+          <Modal isOpen={settingsModal.isOpen} onClose={settingsModal.onClose}>
+            <ModalOverlay />
+            <ModalContent bg="#1B1C22" borderColor="gray.700" borderWidth="1px">
+              <ModalHeader color="white">Settings</ModalHeader>
+              <ModalCloseButton color="white" />
+              <ModalBody>
       <SettingsModal />
+              </ModalBody>
+            </ModalContent>
+          </Modal>
+        </Flex>
     </Box>
+    </>
   );
 };
 

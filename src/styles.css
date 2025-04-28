@@ -1,0 +1,138 @@
+@import url('https://fonts.googleapis.com/css2?family=Lilita+One&display=swap');
+
+body {
+  font-family: "Lilita One", sans-serif;
+  font-weight: 400;
+  font-style: normal;
+  background-color: #121212;
+  color: white;
+}
+
+.lilita-one-regular {
+  font-family: "Lilita One", sans-serif;
+  font-weight: 400;
+  font-style: normal;
+}
+
+.main-container {
+  width: 100%;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.swap-container {
+  display: flex;
+  flex-direction: column;
+}
+
+@media (min-width: 768px) {
+  .swap-container {
+    flex-direction: row;
+    gap: 16px;
+  }
+}
+
+.swap-card {
+  background-color: #1B1C22;
+  border: 1px solid #2A2C33;
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.token-input {
+  background-color: rgba(0, 0, 0, 0.2);
+  border: none;
+  border-radius: 8px;
+  color: white;
+  font-size: 1.5rem;
+  padding: 12px;
+}
+
+.token-selector {
+  display: flex;
+  align-items: center;
+  background-color: rgba(0, 0, 0, 0.3);
+  border-radius: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+
+.token-selector img {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  margin-right: 8px;
+}
+
+.route-card {
+  background-color: #1B1C22;
+  border: 1px solid #2A2C33;
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 8px;
+}
+
+.route-card-selected {
+  background-color: #1B1C22;
+  border: 1px solid #86DC3D;
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 8px;
+}
+
+.connect-wallet-btn {
+  background-color: #86DC3D;
+  color: black;
+  border: none;
+  border-radius: 8px;
+  font-weight: bold;
+  padding: 12px;
+  width: 100%;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.connect-wallet-btn:hover {
+  background-color: #78C535;
+}
+
+.swap-tabs {
+  display: flex;
+  margin-bottom: 16px;
+}
+
+.swap-tab {
+  padding: 8px 16px;
+  cursor: pointer;
+  font-weight: bold;
+}
+
+.swap-tab.active {
+  color: #86DC3D;
+  border-bottom: 2px solid #86DC3D;
+}
+
+.swap-actions {
+  display: flex;
+  justify-content: space-between;
+  margin: 16px 0;
+}
+
+.percentage-tag {
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: bold;
+}
+
+.percentage-tag.positive {
+  background-color: rgba(134, 220, 61, 0.2);
+  color: #86DC3D;
+}
+
+.percentage-tag.negative {
+  background-color: rgba(255, 59, 59, 0.2);
+  color: #FF3B3B;
+} 

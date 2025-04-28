@@ -1273,3 +1273,101 @@ button:focus {
   background: #8B0000 !important;
   border-color: #A00000 !important;
 }
+
+/* New styles for the redesigned swap interface */
+.swap-container {
+  display: flex;
+  flex-direction: column;
+}
+
+@media (min-width: 768px) {
+  .swap-container {
+    flex-direction: row;
+    gap: 16px;
+  }
+}
+
+.token-input {
+  background-color: transparent;
+  border: none;
+  border-radius: 8px;
+  color: white;
+  font-size: 1.5rem;
+  padding: 8px 0;
+  width: 100%;
+}
+
+.token-input:focus {
+  outline: none;
+  box-shadow: none;
+}
+
+.token-selector {
+  display: flex;
+  align-items: center;
+  background-color: rgba(0, 0, 0, 0.3);
+  border-radius: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+
+.route-card {
+  background-color: #1B1C22;
+  border: 1px solid #2A2C33;
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 8px;
+  transition: border-color 0.2s ease;
+}
+
+.route-card:hover {
+  border-color: #86DC3D;
+}
+
+.route-card-selected {
+  background-color: #1B1C22;
+  border: 1px solid #86DC3D;
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 8px;
+}
+
+.connect-wallet-btn {
+  background-color: #86DC3D;
+  color: black;
+  border: none;
+  border-radius: 8px;
+  font-weight: bold;
+  padding: 12px;
+  width: 100%;
+  cursor: pointer;
+}
+
+.connect-wallet-btn:hover {
+  background-color: #78C535;
+}
+
+.percentage-tag {
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: bold;
+}
+
+.percentage-tag.positive {
+  background-color: rgba(134, 220, 61, 0.2);
+  color: #86DC3D;
+}
+
+.percentage-tag.negative {
+  background-color: rgba(255, 59, 59, 0.2);
+  color: #FF3B3B;
+}
+
+/* Dark theme overrides */
+body {
+  background-color: #121212;
+  color: white;
+  font-family: "Lilita One", sans-serif;
+}
