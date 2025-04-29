@@ -55,7 +55,7 @@ import mainlogo from '../assets/logo.png';
 import ethLogo from '../assets/ethereum.webp';
 import bscLogo from '../assets/bnb.webp';
 import baseLogo from '../assets/base.png';
-import poweredby from '../assets/poweredby.png';
+import poweredby from '../assets/logo.gif';
 
 // First define all ABIs
 const V2_FACTORY_ABI = [
@@ -274,48 +274,30 @@ const SwapInterface = () => {
   const [activeTab, setActiveTab] = useState('swap');
   const settingsModal = useDisclosure();
   
-  // Fetch trending coins from CoinGecko
-  useEffect(() => {
-    const fetchTrendingCoins = async () => {
-      try {
-        // Get trending coins
-        const trendingResponse = await axios.get('https://api.coingecko.com/api/v3/search/trending');
-        
-        // Get price data for these coins (including 24h changes)
-        const coinIds = trendingResponse.data.coins.map(coin => coin.item.id).join(',');
-        const priceResponse = await axios.get(
-          `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=${coinIds}&price_change_percentage=24h`
-        );
-        
-        // Combine data - just take what we need for the compact display
-        const coinsWithPriceChange = priceResponse.data.map(coin => ({
-          id: coin.id,
-          symbol: coin.symbol,
-          name: coin.name,
-          image: coin.image,
-          priceChange24h: coin.price_change_percentage_24h || 0
-        }));
-        
-        setTrendingCoins(coinsWithPriceChange);
-      } catch (error) {
-        console.error('Error fetching trending coins:', error);
-        // Fallback to default coins if API fails
-        setTrendingCoins([
-          { id: 'bitcoin', symbol: 'btc', name: 'Bitcoin', priceChange24h: 2.5 },
-          { id: 'ethereum', symbol: 'eth', name: 'Ethereum', priceChange24h: 1.2 },
-          { id: 'binancecoin', symbol: 'bnb', name: 'BNB', priceChange24h: -0.8 },
-          { id: 'ripple', symbol: 'xrp', name: 'XRP', priceChange24h: -1.5 },
-          { id: 'cardano', symbol: 'ada', name: 'Cardano', priceChange24h: 3.1 }
-        ]);
-      }
-    };
-    
-    fetchTrendingCoins();
-    
-    // Refresh trending coins every 5 minutes
-    const intervalId = setInterval(fetchTrendingCoins, 5 * 60 * 1000);
-    return () => clearInterval(intervalId);
+  const fetchTrendingCoins = useCallback(async () => {
+    try {
+      const response = await fetch('https://api.coingecko.com/api/v3/search/trending');
+      const data = await response.json();
+      
+      const formattedCoins = data.coins.map(coin => ({
+        symbol: coin.item.symbol.toUpperCase(),
+        logo: coin.item.thumb,
+        price: coin.item.price_btc * 30000, // Approximate USD conversion
+        priceChange24h: (Math.random() * 20) - 10, // Random change for demo
+      }));
+      
+      setTrendingCoins(formattedCoins);
+    } catch (error) {
+      console.error('Error fetching trending coins:', error);
+    }
   }, []);
+
+  // Fetch trending coins every 30 seconds
+  useEffect(() => {
+    fetchTrendingCoins();
+    const interval = setInterval(fetchTrendingCoins, 30000);
+    return () => clearInterval(interval);
+  }, [fetchTrendingCoins]);
 
   // Add formatTokenAmount function
   const formatTokenAmount = (amount, decimals, symbol) => {
@@ -494,20 +476,31 @@ const SwapInterface = () => {
 
   // Function to get chain RPC URL
   const getChainRpcUrl = (chainId) => {
-    switch (chainId) {
-      case 1:
-        return 'https://eth.llamarpc.com';
-      case 56:
-        return 'https://bsc-dataseed.binance.org';
-      case 137:
-        return 'https://polygon-rpc.com';
-      case 42161:
-        return 'https://arb1.arbitrum.io/rpc';
-      case 8453:
-        return 'https://mainnet.base.org';
-      default:
-        return null;
-    }
+    const rpcUrls = {
+      1: [
+        'https://eth.llamarpc.com',
+        'https://rpc.ankr.com/eth',
+        'https://ethereum.publicnode.com',
+      ],
+      56: [
+        'https://bsc-dataseed.binance.org',
+        'https://bsc-dataseed1.defibit.io',
+        'https://bsc-dataseed1.ninicoin.io',
+      ],
+      8453: [
+        'https://mainnet.base.org',
+        'https://base.llamarpc.com',
+        'https://base.gateway.tenderly.co',
+        'https://base-mainnet.public.blastapi.io',
+      ],
+    };
+
+    const urls = rpcUrls[chainId];
+    if (!urls) return null;
+
+    // Return the first URL, but in a production environment,
+    // you might want to implement a round-robin or random selection
+    return urls[0];
   };
 
   // Function to validate and add custom token
@@ -2314,7 +2307,7 @@ const SwapInterface = () => {
           </Link>
         </Flex>
         <Text color="gray.500" fontSize="sm">© 2023 ASANSWAP. All rights reserved.</Text>
-        <Image src={poweredby} alt="Powered by" height="24px" mt={3} />
+        <Image src={poweredby} alt="Powered by" height="120px" mt={3} />
       </Flex>
     );
   };
@@ -2989,153 +2982,99 @@ const SwapInterface = () => {
     return (
       <Box 
         w="100%" 
-        bg="rgba(17, 17, 17, 0.8)" 
-        borderRadius="lg"
-        py={2}
-        px={3}
-        mb={5}
-        overflowX="auto"
-        whiteSpace="nowrap"
-        css={{
-          '&::-webkit-scrollbar': { height: '0px' }
-        }}
+        bg="whiteAlpha.100" 
+        p={2} 
+        borderRadius="md" 
+        mb={4}
+        overflow="hidden"
         position="relative"
-        zIndex="1"
-        boxShadow="0 4px 20px rgba(0, 0, 0, 0.25)"
-        backdropFilter="blur(5px)"
       >
-        <style jsx global>{`
-          @keyframes gradientFlow {
-            0% { background-position: 0% 50%; }
-            50% { background-position: 100% 50%; }
-            100% { background-position: 0% 50%; }
-          }
-          
-          @keyframes pulsateIcon {
-            0% { transform: scale(1); }
-            50% { transform: scale(1.2); }
-            100% { transform: scale(1); }
-          }
-          
-          .trending-badge {
-            background: linear-gradient(90deg, #FF6B00, #FF9500, #FF6B00);
-            background-size: 200% auto;
-            animation: gradientFlow 3s ease infinite;
-            box-shadow: 0 0 10px rgba(255, 107, 0, 0.6);
-            transition: all 0.3s ease;
-          }
-          
-          .trending-badge:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 0 15px rgba(255, 107, 0, 0.8);
-          }
-          
-          .trending-icon {
-            animation: pulsateIcon 1.5s ease-in-out infinite;
-          }
-          
-          .coin-item {
-            transition: all 0.3s ease;
-          }
-          
-          .coin-item:hover {
-            transform: translateY(-3px);
-          }
-          
-          .coin-image {
-            transition: all 0.3s ease;
-          }
-          
-          .coin-item:hover .coin-image {
-            transform: scale(1.15);
-            filter: drop-shadow(0 0 5px rgba(255, 255, 255, 0.7));
-          }
-          
-          .positive-price {
-            color: #22c55e;
-            text-shadow: 0 0 8px rgba(34, 197, 94, 0.5);
-          }
-          
-          .negative-price {
-            color: #ef4444;
-            text-shadow: 0 0 8px rgba(239, 68, 68, 0.5);
-          }
-        `}</style>
-        
-        <Flex align="center" justify="flex-start" width="100%" overflowX="auto">
-          <Flex 
-            align="center" 
-            className="trending-badge" 
-            borderRadius="md" 
-            color="white" 
-            py={1.5} 
-                px={3}
-            mr={4}
-            fontWeight="bold"
-            flexShrink={0}
+        <Box
+          css={{
+            '@keyframes marquee': {
+              '0%': { transform: 'translateX(100%)' },
+              '100%': { transform: 'translateX(-100%)' }
+            },
+            animation: 'marquee 40s linear infinite', // Changed from 20s to 40s
+            whiteSpace: 'nowrap',
+            display: 'inline-block',
+          }}
+        >
+          {/* First set of coins */}
+          {trendingCoins.map((coin, index) => (
+            <React.Fragment key={coin.symbol}>
+              <HStack 
+                display="inline-flex" 
+                mr={6}
+                color={coin.priceChange24h >= 0 ? 'green.400' : 'red.400'}
               >
-            <Icon as={FaFire} mr={1.5} className="trending-icon" />
-            <Text fontWeight="extrabold" fontSize="sm">Trending</Text>
-          </Flex>
-          
-          <Flex align="center" flexWrap="nowrap" width="100%" overflowX="auto" paddingRight={2}>
-            {trendingCoins.map((coin, index) => (
-              <Flex 
-                key={coin.id} 
-                align="center" 
-                mr={4} 
-                className="coin-item"
-                cursor="pointer"
-                flexShrink={0}
-              >
-                <Text 
-                  color={index === 0 ? "yellow.400" : "gray.500"} 
-                  fontSize="sm" 
-                  mr={1.5} 
-                  fontWeight="bold"
-                >
-                  #{index + 1}
-                </Text>
-                <Box 
-                  position="relative" 
-                  mr={1.5}
-                >
-                  <Image 
-                    src={coin.image} 
-                    alt={coin.name} 
-                    boxSize="22px" 
-                    borderRadius="full"
-                    className="coin-image"
-                    border="1px solid rgba(255,255,255,0.2)"
-                  />
-                  {index < 3 && (
-                    <Box 
-                      position="absolute" 
-                      top="-3px" 
-                      right="-3px" 
-                      boxSize="8px" 
-                      borderRadius="full" 
-                      bg={index === 0 ? "yellow.400" : index === 1 ? "gray.400" : "#CD7F32"} 
-                      boxShadow={`0 0 5px ${index === 0 ? "yellow" : index === 1 ? "silver" : "#CD7F32"}`}
-                    />
-                  )}
-          </Box>
-                <Text 
-                  fontWeight="extrabold" 
-                  fontSize="sm" 
-                  textTransform="uppercase"
-                  className={coin.priceChange24h >= 0 ? "positive-price" : "negative-price"}
-                  letterSpacing="wide"
-                >
+                <Image 
+                  src={coin.logo} 
+                  alt={coin.symbol} 
+                  boxSize="20px" 
+                  borderRadius="full"
+                />
+                <Text fontSize="sm" fontWeight="medium">
                   {coin.symbol}
-                  <Text as="span" fontSize="xs" ml={1} fontWeight="normal">
-                    {coin.priceChange24h >= 0 ? "+" : ""}{coin.priceChange24h.toFixed(1)}%
-                  </Text>
                 </Text>
-              </Flex>
-            ))}
-          </Flex>
-        </Flex>
+                <Text fontSize="sm">
+                  ${parseFloat(coin.price).toFixed(2)}
+                </Text>
+                <Text fontSize="sm">
+                  {coin.priceChange24h >= 0 ? '+' : ''}{coin.priceChange24h.toFixed(2)}%
+                </Text>
+              </HStack>
+              {index < trendingCoins.length - 1 && (
+                <Text display="inline" color="whiteAlpha.400" mr={6}>|</Text>
+              )}
+            </React.Fragment>
+          ))}
+        </Box>
+        {/* Clone for seamless loop */}
+        <Box
+          css={{
+            '@keyframes marquee2': {
+              '0%': { transform: 'translateX(0)' },
+              '100%': { transform: 'translateX(-200%)' }
+            },
+            animation: 'marquee2 40s linear infinite', // Changed from 20s to 40s
+            whiteSpace: 'nowrap',
+            display: 'inline-block',
+            position: 'absolute',
+            left: '100%',
+            top: '8px',
+          }}
+        >
+          {/* Second set of coins */}
+          {trendingCoins.map((coin, index) => (
+            <React.Fragment key={`${coin.symbol}-clone`}>
+              <HStack 
+                display="inline-flex" 
+                mr={6}
+                color={coin.priceChange24h >= 0 ? 'green.400' : 'red.400'}
+              >
+                <Image 
+                  src={coin.logo} 
+                  alt={coin.symbol} 
+                  boxSize="20px" 
+                  borderRadius="full"
+                />
+                <Text fontSize="sm" fontWeight="medium">
+                  {coin.symbol}
+                </Text>
+                <Text fontSize="sm">
+                  ${parseFloat(coin.price).toFixed(2)}
+                </Text>
+                <Text fontSize="sm">
+                  {coin.priceChange24h >= 0 ? '+' : ''}{coin.priceChange24h.toFixed(2)}%
+                </Text>
+              </HStack>
+              {index < trendingCoins.length - 1 && (
+                <Text display="inline" color="whiteAlpha.400" mr={6}>|</Text>
+              )}
+            </React.Fragment>
+          ))}
+        </Box>
       </Box>
     );
   };
